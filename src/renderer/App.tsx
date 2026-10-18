@@ -1,39 +1,34 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-import { AlertCircle, Archive, ArchiveRestore, ArrowLeft, ArrowUpRight, CalendarDays, Check, CheckCircle2, ChevronRight, Circle, CreditCard, Download, DownloadCloud, ExternalLink, FileText, FolderOpen, HardDrive, KeyRound, Link2, Loader2, MoreHorizontal, Paperclip, Plus, RefreshCw, Search, StickyNote, Trash2, Upload, Wallet, X } from 'lucide-react';
+import { AlertCircle, Archive, ArchiveRestore, ArrowLeft, CalendarDays, Check, CheckCircle2, ChevronRight, Circle, CreditCard, Download, DownloadCloud, ExternalLink, FileText, HardDrive, KeyRound, Loader2, MoreHorizontal, Plus, RefreshCw, Search, Trash2, Upload, Wallet, X } from 'lucide-react';
 import { getSteps } from '../shared/markdown';
 import { assetUrl, daysUntil, openExternal, request, dateTime, fileSize } from './api';
 import { Confirm, Editor, Empty, Markdown, Modal } from './components';
 import type { Confirmation, EditorHandle } from './components';
-import type { ApiQuota, Attachment, Backup, EditorValue, Kind, Note, QuotaDraft, Selection, State, Subscription, SubscriptionDraft, Task, View } from './types';
+import type { ApiQuota, Backup, EditorValue, Kind, QuotaDraft, Selection, State, Subscription, SubscriptionDraft, Task, View } from './types';
 import type { UpdateStatus } from '../shared/updates';
 
 const navigation = [
   { id: 'pending' as const, title: '待办', icon: Circle },
   { id: 'completed' as const, title: '已完成', icon: CheckCircle2 },
-  { id: 'notes' as const, title: '随手记', icon: StickyNote },
-  { id: 'attachments' as const, title: '附件', icon: Paperclip },
 ];
 const serviceNav = [
   { id: 'quotas' as const, title: 'API 额度', icon: Wallet },
   { id: 'subscriptions' as const, title: 'AI 订阅', icon: CreditCard },
 ];
 const viewTitles: Record<View, string> = {
-  pending: '待办', completed: '已完成', notes: '随手记', attachments: '附件',
-  quotas: 'API 额度', subscriptions: 'AI 订阅', trash: '回收站',
+  pending: '待办', completed: '已完成', quotas: 'API 额度', subscriptions: 'AI 订阅', trash: '回收站',
 };
 const viewDescriptions: Record<View, string> = {
   pending: '有日期事项在前，未定日期事项随后。',
   completed: '保留每件事项的说明与步骤记录。',
-  notes: '保存想法、信息与日常记录。',
-  attachments: '集中查看文件，关联到事项或记录。',
   quotas: '官方与中转 API 余额、入口与备注。',
   subscriptions: '按到期日排序；14 天内到期会高亮提醒。',
-  trash: '恢复已删除的事项、记录、附件与服务条目。',
+  trash: '恢复已删除的事项与服务条目。',
 };
-type Item = Selection & { title: string; subtitle: string; entity: Task | Note | Attachment | ApiQuota | Subscription };
+type Item = Selection & { title: string; subtitle: string; entity: Task | ApiQuota | Subscription };
 type Editing =
-  | { kind: 'task' | 'note'; id: string | null; initial: EditorValue }
+  | { kind: 'task'; id: string | null; initial: EditorValue }
   | { kind: 'quota'; id: string | null; initial: QuotaDraft }
   | { kind: 'subscription'; id: string | null; initial: SubscriptionDraft };
 
@@ -54,7 +49,6 @@ export default function App() {
   const [wide, setWide] = useState(window.innerWidth >= 1180);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [dataOpen, setDataOpen] = useState(false);
-  const [linkFile, setLinkFile] = useState<Attachment | null>(null);
   const listRef = useRef<HTMLElement>(null);
   const detailRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -85,7 +79,7 @@ export default function App() {
     setConfirmation({
       title: '存在未保存的修改', message: '当前编辑内容尚未保存。保存后继续，或明确放弃本次修改。', primary: '保存并继续',
       action: async () => {
-        if (editing?.kind === 'task' || editing?.kind === 'note') {
+        if (editing?.kind === 'task') {
           if (await editorRef.current?.save()) action();
         } else {
           setEditing(null); setDirty(false); action();
@@ -96,11 +90,11 @@ export default function App() {
   }
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's' && editing && (editing.kind === 'task' || editing.kind === 'note')) {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's' && editing?.kind === 'task') {
         event.preventDefault(); void editorRef.current?.save();
       }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && !dataOpen && !linkFile && !confirmation) { event.preventDefault(); searchRef.current?.focus(); }
-      if (event.key === 'Escape' && !wide && drawerOpen && !dataOpen && !linkFile && !confirmation) guarded(() => setDrawerOpen(false));
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && !dataOpen && !confirmation) { event.preventDefault(); searchRef.current?.focus(); }
+      if (event.key === 'Escape' && !wide && drawerOpen && !dataOpen && !confirmation) guarded(() => setDrawerOpen(false));
     };
     window.addEventListener('keydown', keydown);
     return () => window.removeEventListener('keydown', keydown);
@@ -113,8 +107,6 @@ export default function App() {
     if (!state) return [];
     const all: Item[] = [
       ...state.tasks.map(task => ({ kind: 'task' as const, id: task.id, title: task.title, subtitle: task.dateText, entity: task })),
-      ...state.notes.map(note => ({ kind: 'note' as const, id: note.id, title: note.title, subtitle: note.bodyMarkdown, entity: note })),
-      ...state.attachments.map(file => ({ kind: 'attachment' as const, id: file.id, title: file.filename, subtitle: fileSize(file.size), entity: file })),
       ...state.quotas.map(item => ({ kind: 'quota' as const, id: item.id, title: item.platform, subtitle: item.balance + ' · ' + item.kind, entity: item })),
       ...state.subscriptions.map(item => ({ kind: 'subscription' as const, id: item.id, title: item.service + (item.account ? ' · ' + item.account : ''), subtitle: [item.plan, item.expiresAt].filter(Boolean).join(' · '), entity: item })),
     ];
@@ -132,9 +124,7 @@ export default function App() {
       });
     }
     if (view === 'trash') return all.filter(item => item.entity.deletedAt).sort((a, b) => b.entity.deletedAt!.localeCompare(a.entity.deletedAt!));
-    if (view === 'pending' || view === 'completed') return all.filter(item => !item.entity.deletedAt && item.kind === 'task' && 'status' in item.entity && item.entity.status === view);
-    if (view === 'notes') return all.filter(item => !item.entity.deletedAt && item.kind === 'note');
-    if (view === 'attachments') return all.filter(item => !item.entity.deletedAt && item.kind === 'attachment');
+    if (view === 'pending' || view === 'completed') return all.filter(item => !item.entity.deletedAt && item.kind === 'task' && (item.entity as Task).status === view);
     if (view === 'quotas') return all.filter(item => !item.entity.deletedAt && item.kind === 'quota');
     if (view === 'subscriptions') return all.filter(item => !item.entity.deletedAt && item.kind === 'subscription');
     return [];
@@ -148,20 +138,15 @@ export default function App() {
   useLayoutEffect(() => { if (listRef.current) listRef.current.scrollTop = scrollPositions.current[effectiveView] || 0; }, [effectiveView]);
   const selectedItem = items.find(item => item.id === selection?.id && item.kind === selection?.kind);
   const selectedTask = selectedItem?.kind === 'task' ? selectedItem.entity as Task : null;
-  const selectedNote = selectedItem?.kind === 'note' ? selectedItem.entity as Note : null;
-  const selectedFile = selectedItem?.kind === 'attachment' ? selectedItem.entity as Attachment : null;
   const selectedQuota = selectedItem?.kind === 'quota' ? selectedItem.entity as ApiQuota : null;
   const selectedSub = selectedItem?.kind === 'subscription' ? selectedItem.entity as Subscription : null;
   const counts = state ? {
     pending: state.tasks.filter(task => !task.deletedAt && task.status === 'pending').length,
     completed: state.tasks.filter(task => !task.deletedAt && task.status === 'completed').length,
-    notes: state.notes.filter(note => !note.deletedAt).length,
-    attachments: state.attachments.filter(file => !file.deletedAt).length,
     quotas: state.quotas.filter(item => !item.deletedAt).length,
     subscriptions: state.subscriptions.filter(item => !item.deletedAt).length,
-  } : { pending: 0, completed: 0, notes: 0, attachments: 0, quotas: 0, subscriptions: 0 };
-  const trashCount = state ? [...state.tasks, ...state.notes, ...state.attachments, ...state.quotas, ...state.subscriptions].filter(item => item.deletedAt).length : 0;
-  const linkedFiles = (type: 'task' | 'note', id: string) => state?.attachments.filter(file => !file.deletedAt && state.links.some(link => link.attachmentId === file.id && link.ownerType === type && link.ownerId === id)) || [];
+  } : { pending: 0, completed: 0, quotas: 0, subscriptions: 0 };
+  const trashCount = state ? [...state.tasks, ...state.quotas, ...state.subscriptions].filter(item => item.deletedAt).length : 0;
 
   async function operate(action: () => Promise<unknown>, success?: string) {
     if (busy) return;
@@ -176,9 +161,9 @@ export default function App() {
   function choose(item: Item) {
     guarded(() => { setSelection({ kind: item.kind, id: item.id }); setDrawerOpen(true); });
   }
-  function startEdit(kind: 'task' | 'note', entity?: Task | Note) {
+  function startEdit(entity?: Task) {
     guarded(() => {
-      setEditing({ kind, id: entity?.id || null, initial: { title: entity?.title || '', bodyMarkdown: entity?.bodyMarkdown || '', dateText: entity && 'dateText' in entity ? entity.dateText : '', version: entity?.version } });
+      setEditing({ kind: 'task', id: entity?.id || null, initial: { title: entity?.title || '', bodyMarkdown: entity?.bodyMarkdown || '', dateText: entity?.dateText || '', version: entity?.version } });
       setDrawerOpen(true);
     });
   }
@@ -204,11 +189,10 @@ export default function App() {
     });
   }
   async function saveEditor(value: EditorValue) {
-    if (!editing || (editing.kind !== 'task' && editing.kind !== 'note')) return;
-    const record = await request<Task | Note>('/api/' + (editing.kind === 'task' ? 'tasks' : 'notes') + (editing.id ? '/' + editing.id : ''), editing.id ? 'PATCH' : 'POST', value);
-    const kind = editing.kind;
-    setEditing(null); setDirty(false); setQuery(''); setView(kind === 'task' ? ('status' in record ? record.status : 'pending') : 'notes');
-    setSelection({ kind, id: record.id }); setNotice('已保存');
+    if (!editing || editing.kind !== 'task') return;
+    const record = await request<Task>('/api/tasks' + (editing.id ? '/' + editing.id : ''), editing.id ? 'PATCH' : 'POST', value);
+    setEditing(null); setDirty(false); setQuery(''); setView(record.status);
+    setSelection({ kind: 'task', id: record.id }); setNotice('已保存');
     void load().catch(failure => setError('内容已经保存，列表刷新失败：' + failure.message));
   }
   async function saveQuota(value: QuotaDraft) {
@@ -230,55 +214,33 @@ export default function App() {
     if (status === 'completed' && remaining) setConfirmation({ title: '确认完成整件事项', message: '仍有 ' + remaining + ' 个未完成步骤。归档后保留当前步骤状态。', primary: '完成并归档', action });
     else void action();
   }
-  function removeItem(kind: Kind, entity: Task | Note | Attachment | ApiQuota | Subscription) {
-    const title = 'filename' in entity ? entity.filename : 'platform' in entity ? entity.platform : 'service' in entity ? entity.service : entity.title;
-    const path = { task: 'tasks', note: 'notes', attachment: 'attachments', quota: 'quotas', subscription: 'subscriptions' }[kind];
+  function removeItem(kind: Kind, entity: Task | ApiQuota | Subscription) {
+    const title = 'platform' in entity ? entity.platform : 'service' in entity ? entity.service : entity.title;
+    const path = { task: 'tasks', quota: 'quotas', subscription: 'subscriptions' }[kind];
     setConfirmation({
       title: '移入回收站', message: '“' + title + '”将移入回收站，可随时恢复。', primary: '移入回收站', destructive: true,
-      action: () => operate(() => request('/api/' + path + '/' + entity.id, 'DELETE', 'version' in entity ? { version: entity.version } : {}), '已移入回收站'),
+      action: () => operate(() => request('/api/' + path + '/' + entity.id, 'DELETE', { version: entity.version }), '已移入回收站'),
     });
-  }
-  async function uploadFiles(files: File[], owner?: Selection) {
-    const data = new FormData();
-    files.forEach(file => data.append('files', file));
-    if (owner && (owner.kind === 'task' || owner.kind === 'note')) { data.append('ownerType', owner.kind); data.append('ownerId', owner.id); }
-    await operate(() => request('/api/attachments', 'POST', data), files.length + ' 个附件已保存到本机');
-  }
-  async function toggleLink(file: Attachment, ownerType: 'task' | 'note', ownerId: string) {
-    const exists = state?.links.some(link => link.attachmentId === file.id && link.ownerType === ownerType && link.ownerId === ownerId);
-    await operate(() => request('/api/attachments/' + file.id + '/links', exists ? 'DELETE' : 'POST', { ownerType, ownerId }));
-  }
-  function jumpToOwner(type: 'task' | 'note', id: string) {
-    const owner = type === 'task' ? state?.tasks.find(task => task.id === id) : state?.notes.find(note => note.id === id);
-    if (!owner) return;
-    guarded(() => { setQuery(''); setView(owner.deletedAt ? 'trash' : type === 'task' ? (owner as Task).status : 'notes'); setSelection({ kind: type, id }); setDrawerOpen(true); });
   }
 
   const detail = editing?.kind === 'quota' ? <ServiceEditor kind="quota" initial={editing.initial} isNew={!editing.id} onSave={value => void saveQuota(value as QuotaDraft)} onCancel={() => guarded(() => {})} onDirty={setDirty} />
     : editing?.kind === 'subscription' ? <ServiceEditor kind="subscription" initial={editing.initial} isNew={!editing.id} onSave={value => void saveSubscription(value as SubscriptionDraft)} onCancel={() => guarded(() => {})} onDirty={setDirty} />
-    : editing && (editing.kind === 'task' || editing.kind === 'note') ? <Editor key={editing.kind + (editing.id || '-new')} ref={editorRef} initial={editing.initial} kind={editing.kind} isNew={!editing.id} onSave={saveEditor} onDirty={setDirty} onCancel={() => guarded(() => {})} />
-    : !selectedItem ? <Empty title="选择一项查看详情" text="说明、检查步骤、服务信息与相关附件会显示在这里。" icon={<FileText size={26} />} />
+    : editing?.kind === 'task' ? <Editor key={'task' + (editing.id || '-new')} ref={editorRef} initial={editing.initial} kind="task" isNew={!editing.id} onSave={saveEditor} onDirty={setDirty} onCancel={() => guarded(() => {})} />
+    : !selectedItem ? <Empty title="选择一项查看详情" text="说明、检查步骤与服务信息会显示在这里。" icon={<FileText size={26} />} />
     : view === 'trash' && !query.trim() ? <div className="detail-layout">
       <DetailToolbar caption="回收站内容" onClose={() => setDrawerOpen(false)} />
       <div className="detail-scroll"><h2 className="detail-title">{selectedItem.title}</h2><p className="muted">删除于 {dateTime(selectedItem.entity.deletedAt)}</p>
         {'bodyMarkdown' in selectedItem.entity && <Markdown body={selectedItem.entity.bodyMarkdown} />}
-        <div className="recycle-note"><ArchiveRestore size={20} /><p>正文、步骤状态与附件关联均保留。</p></div>
+        <div className="recycle-note"><ArchiveRestore size={20} /><p>正文与步骤状态均保留。</p></div>
       </div>
       <div className="detail-footer"><button className="button primary" disabled={busy} onClick={() => void operate(() => request('/api/trash/' + selectedItem.kind + '/' + selectedItem.id + '/restore', 'POST'), '已从回收站恢复')}><ArchiveRestore size={16} />恢复内容</button></div>
     </div>
     : selectedTask ? <div className="detail-layout">
-      <DetailToolbar caption="事项详情" onClose={() => setDrawerOpen(false)} onEdit={() => startEdit('task', selectedTask)} onDelete={() => removeItem('task', selectedTask)} />
+      <DetailToolbar caption="事项详情" onClose={() => setDrawerOpen(false)} onEdit={() => startEdit(selectedTask)} onDelete={() => removeItem('task', selectedTask)} />
       <div className="detail-scroll"><h2 className="detail-title">{selectedTask.title}</h2><div className="detail-meta">{selectedTask.dateText && <span><CalendarDays size={14} />{selectedTask.dateText}</span>}<span className={selectedTask.status === 'completed' ? 'completed-tag' : ''}>{selectedTask.status === 'completed' ? '已完成 · ' + dateTime(selectedTask.completedAt) : '待处理'}</span></div>
         {getSteps(selectedTask.bodyMarkdown).length > 0 && <Progress body={selectedTask.bodyMarkdown} />}
         {selectedTask.bodyMarkdown ? <Markdown body={selectedTask.bodyMarkdown} disabled={busy} onToggle={(index, checked) => void operate(() => request('/api/tasks/' + selectedTask.id + '/steps', 'POST', { index, checked, version: selectedTask.version }))} /> : <p className="muted no-description">暂无说明。编辑事项可添加正文和检查步骤。</p>}
-        <AttachmentSection files={linkedFiles('task', selectedTask.id)} busy={busy} onUpload={files => void uploadFiles(files, { kind: 'task', id: selectedTask.id })} onManage={() => { setView('attachments'); setQuery(''); setSelection(null); }} />
       </div><div className="detail-footer"><span className="muted">更新于 {dateTime(selectedTask.updatedAt)}</span><button className={'button ' + (selectedTask.status === 'pending' ? 'primary' : 'secondary')} disabled={busy} onClick={() => completeTask(selectedTask)}>{selectedTask.status === 'pending' ? <><Check size={16} />完成事项</> : <><ArchiveRestore size={16} />恢复待办</>}</button></div>
-    </div>
-    : selectedNote ? <div className="detail-layout">
-      <DetailToolbar caption="随手记录" onClose={() => setDrawerOpen(false)} onEdit={() => startEdit('note', selectedNote)} onDelete={() => removeItem('note', selectedNote)} />
-      <div className="detail-scroll"><h2 className="detail-title">{selectedNote.title}</h2><div className="detail-meta"><span>更新于 {dateTime(selectedNote.updatedAt)}</span></div>{selectedNote.bodyMarkdown ? <Markdown body={selectedNote.bodyMarkdown} /> : <p className="muted no-description">记录正文为空。</p>}
-        <AttachmentSection files={linkedFiles('note', selectedNote.id)} busy={busy} onUpload={files => void uploadFiles(files, { kind: 'note', id: selectedNote.id })} onManage={() => changeView('attachments')} />
-      </div>
     </div>
     : selectedQuota ? <div className="detail-layout">
       <DetailToolbar caption="API 额度" onClose={() => setDrawerOpen(false)} onEdit={() => startQuotaEdit(selectedQuota)} onDelete={() => removeItem('quota', selectedQuota)} />
@@ -305,21 +267,10 @@ export default function App() {
         </dl>
         {selectedSub.entryUrl && <button className="button secondary download-full" onClick={() => void openExternal(selectedSub.entryUrl)}><ExternalLink size={16} />打开入口</button>}
       </div>
-    </div>
-    : selectedFile ? <div className="detail-layout">
-      <DetailToolbar caption="文件信息" onClose={() => setDrawerOpen(false)} onDelete={() => removeItem('attachment', selectedFile)} />
-      <div className="detail-scroll"><div className="file-detail-icon"><FileText size={30} /></div><h2 className="detail-title">{selectedFile.filename}</h2><dl className="file-properties"><dt>大小</dt><dd>{fileSize(selectedFile.size)}</dd><dt>添加时间</dt><dd>{dateTime(selectedFile.createdAt)}</dd><dt>保存位置</dt><dd>本机附件目录</dd></dl><a className="button secondary download-full" href={assetUrl('/api/attachments/' + selectedFile.id + '/download')}><Download size={16} />下载文件</a>
-        <section className="related-section"><div className="section-heading"><h3>关联内容</h3><button className="text-button" onClick={() => setLinkFile(selectedFile)}><Link2 size={14} />管理关联</button></div>
-          {state?.links.filter(link => link.attachmentId === selectedFile.id).length ? state.links.filter(link => link.attachmentId === selectedFile.id).map(link => {
-            const owner = link.ownerType === 'task' ? state.tasks.find(task => task.id === link.ownerId) : state.notes.find(note => note.id === link.ownerId);
-            return <button key={link.ownerType + link.ownerId} className="related-row" onClick={() => jumpToOwner(link.ownerType, link.ownerId)}><span>{owner?.title || '关联内容'}{owner?.deletedAt && <small>回收站</small>}</span><ArrowUpRight size={15} /></button>;
-          }) : <p className="muted">尚未关联到事项或记录。</p>}
-        </section>
-      </div>
     </div> : null;
 
   return <div className="app-shell">
-    <aside className="sidebar">
+    <aside className="sidebar panel">
       <div className="brand"><span className="brand-mark" aria-hidden="true"><FolioMark /></span><span>Folio</span></div>
       <p className="nav-caption">事务</p>
       <nav aria-label="事务导航">{navigation.map(item => <button key={item.id} className={'nav-item ' + (view === item.id && !query.trim() ? 'active' : '')} onClick={() => changeView(item.id)} title={item.title}><item.icon size={18} /><span>{item.title}</span><small>{counts[item.id]}</small></button>)}</nav>
@@ -333,60 +284,54 @@ export default function App() {
       </div>
     </aside>
     <main className="workspace">
-      <header className="topbar">
-        <div className="page-heading"><h1>{query.trim() ? '搜索结果' : viewTitles[view]}</h1><p>{query.trim() ? '搜索事项、记录、额度与订阅。' : viewDescriptions[view]}</p></div>
+      <header className="topbar panel">
+        <div className="page-heading"><h1>{query.trim() ? '搜索结果' : viewTitles[view]}</h1><p>{query.trim() ? '搜索事项、额度与订阅。' : viewDescriptions[view]}</p></div>
         <div className="topbar-actions">
           <label className="search-field"><Search size={16} /><input ref={searchRef} value={query} onChange={event => { const value = event.target.value; if (dirty) guarded(() => setQuery(value)); else { setEditing(null); setQuery(value); } }} placeholder="搜索全部内容" aria-label="搜索全部内容" />{query ? <button className="icon-button" aria-label="清除搜索" onClick={() => setQuery('')}><X size={14} /></button> : <kbd>Ctrl K</kbd>}</label>
           <button className="icon-button refresh-button" title="重新读取数据" aria-label="重新读取数据" disabled={busy} onClick={() => guarded(() => void load().catch(failure => setError(failure.message)))}><RefreshCw size={16} /></button>
-          {(view === 'pending' || view === 'notes') && !query.trim() && <button className="button primary new-button" onClick={() => startEdit(view === 'notes' ? 'note' : 'task')}><Plus size={16} /><span>{view === 'notes' ? '新记录' : '新事项'}</span></button>}
+          {view === 'pending' && !query.trim() && <button className="button primary new-button" onClick={() => startEdit()}><Plus size={16} /><span>新事项</span></button>}
           {view === 'quotas' && !query.trim() && <button className="button primary new-button" onClick={() => startQuotaEdit()}><Plus size={16} /><span>新额度</span></button>}
           {view === 'subscriptions' && !query.trim() && <button className="button primary new-button" onClick={() => startSubEdit()}><Plus size={16} /><span>新订阅</span></button>}
-          {view === 'attachments' && !query.trim() && <FilePicker busy={busy} label="添加文件" onPick={files => void uploadFiles(files)} />}
         </div>
       </header>
       {error && <div className="error-banner" role="alert"><AlertCircle size={16} /><span>{error}</span><button className="icon-button" aria-label="关闭错误提示" onClick={() => setError('')}><X size={16} /></button></div>}
       {notice && <div className="notice" role="status"><Check size={15} /><span>{notice}</span><button className="icon-button" onClick={() => setNotice('')} aria-label="关闭提示"><X size={14} /></button></div>}
       <div className="content-grid">
-        <section ref={listRef} className="list-pane" aria-label="内容列表" onScroll={event => { scrollPositions.current[effectiveView] = event.currentTarget.scrollTop; }}>
-          <div className="list-heading"><span>{items.length} {view === 'attachments' && !query ? '个文件' : '项内容'}</span><span>{busy ? <><Loader2 className="spinning" size={13} />正在保存</> : query.trim() ? '全部记录' : view === 'notes' ? '最近更新在前' : view === 'trash' ? '最近删除在前' : view === 'attachments' ? '最近添加在前' : view === 'subscriptions' ? '按到期排序' : view === 'quotas' ? '按平台排序' : '按日期排序'}</span></div>
+        <section ref={listRef} className="list-pane panel" aria-label="内容列表" onScroll={event => { scrollPositions.current[effectiveView] = event.currentTarget.scrollTop; }}>
+          <div className="list-heading"><span>{items.length} 项内容</span><span>{busy ? <><Loader2 className="spinning" size={13} />正在保存</> : query.trim() ? '全部记录' : view === 'trash' ? '最近删除在前' : view === 'subscriptions' ? '按到期排序' : view === 'quotas' ? '按平台排序' : '按日期排序'}</span></div>
           {!state ? <Empty title={error ? '暂时无法读取数据' : '正在读取本地记录'} text={error ? '本地服务恢复后可重新读取，编辑内容不会清空。' : '正在连接本机服务。'} action={error ? () => void load().catch(failure => setError(failure.message)) : undefined} actionLabel="重新读取" icon={<Loader2 size={25} className={error ? '' : 'spinning'} />} /> :
             !items.length ? <Empty
-              title={query.trim() ? '没有找到匹配内容' : view === 'pending' ? '待办列表为空' : view === 'completed' ? '还没有已完成事项' : view === 'notes' ? '还没有随手记录' : view === 'attachments' ? '附件目录为空' : view === 'quotas' ? '还没有额度记录' : view === 'subscriptions' ? '还没有订阅记录' : '回收站为空'}
-              text={query.trim() ? '尝试其他关键词，或清除搜索查看全部内容。' : view === 'completed' ? '完成的事项会保留在这里。' : view === 'trash' ? '删除内容后，可在这里恢复。' : view === 'attachments' ? '通过“添加文件”保存文件，或从事项详情中添加。' : view === 'quotas' ? '记录官方与中转平台的余额与入口。' : view === 'subscriptions' ? '记录套餐、费用与到期日。' : '从一条真实事项或记录开始。'}
-              action={query.trim() ? () => setQuery('') : view === 'pending' || view === 'notes' ? () => startEdit(view === 'notes' ? 'note' : 'task') : view === 'quotas' ? () => startQuotaEdit() : view === 'subscriptions' ? () => startSubEdit() : undefined}
+              title={query.trim() ? '没有找到匹配内容' : view === 'pending' ? '待办列表为空' : view === 'completed' ? '还没有已完成事项' : view === 'quotas' ? '还没有额度记录' : view === 'subscriptions' ? '还没有订阅记录' : '回收站为空'}
+              text={query.trim() ? '尝试其他关键词，或清除搜索查看全部内容。' : view === 'completed' ? '完成的事项会保留在这里。' : view === 'trash' ? '删除内容后，可在这里恢复。' : view === 'quotas' ? '记录官方与中转平台的余额与入口。' : view === 'subscriptions' ? '记录套餐、费用与到期日。' : '从一条真实事项开始。'}
+              action={query.trim() ? () => setQuery('') : view === 'pending' ? () => startEdit() : view === 'quotas' ? () => startQuotaEdit() : view === 'subscriptions' ? () => startSubEdit() : undefined}
               actionLabel={query.trim() ? '清除搜索' : '新建'}
-              icon={view === 'notes' ? <StickyNote size={27} /> : view === 'attachments' ? <FolderOpen size={27} /> : view === 'completed' ? <Archive size={27} /> : view === 'trash' ? <Trash2 size={27} /> : view === 'quotas' ? <KeyRound size={27} /> : view === 'subscriptions' ? <CreditCard size={27} /> : <Circle size={27} />}
+              icon={view === 'completed' ? <Archive size={27} /> : view === 'trash' ? <Trash2 size={27} /> : view === 'quotas' ? <KeyRound size={27} /> : view === 'subscriptions' ? <CreditCard size={27} /> : <Circle size={27} />}
             /> :
             <div className="content-list">{items.map((item, index) => <div key={item.kind + item.id}>
               {!query && view === 'pending' && item.kind === 'task' && !(item.entity as Task).dateText && (index === 0 || (items[index - 1].entity as Task).dateText) && <div className="list-group-label">未定日期</div>}
               <button className={'content-row ' + (selection?.id === item.id && selection.kind === item.kind ? 'selected' : '') + (item.kind === 'subscription' && expiryUrgent((item.entity as Subscription).expiresAt) ? ' urgent' : '')} onClick={() => choose(item)} aria-pressed={selection?.id === item.id && selection.kind === item.kind}>
                 <span className={'row-icon ' + item.kind}>
                   {item.kind === 'task' ? ((item.entity as Task).status === 'completed' ? <CheckCircle2 size={18} /> : <Circle size={18} />)
-                    : item.kind === 'note' ? <FileText size={18} />
-                    : item.kind === 'attachment' ? <Paperclip size={18} />
                     : item.kind === 'quota' ? <Wallet size={18} />
                     : <CreditCard size={18} />}
                 </span>
                 <span className="row-content"><strong>{item.title}</strong><span className="row-metadata">
                   {view === 'trash' && !query ? <span>删除于 {dateTime(item.entity.deletedAt)}</span>
-                    : item.kind === 'task' ? <><span className={(item.entity as Task).dateText ? 'date-label' : ''}>{(item.entity as Task).dateText || '未定日期'}</span>{getSteps((item.entity as Task).bodyMarkdown).length > 0 && <span>{getSteps((item.entity as Task).bodyMarkdown).filter(step => step.checked).length}/{getSteps((item.entity as Task).bodyMarkdown).length} 步骤</span>}{linkedFiles('task', item.id).length > 0 && <span><Paperclip size={12} />{linkedFiles('task', item.id).length}</span>}{query && <span>{(item.entity as Task).status === 'completed' ? '已完成' : '待办'}</span>}</>
-                    : item.kind === 'note' ? <span className="note-excerpt">{(item.entity as Note).bodyMarkdown.replace(/[#*_\n\r]/g, ' ').slice(0, 65) || '正文为空'}</span>
+                    : item.kind === 'task' ? <><span className={(item.entity as Task).dateText ? 'date-label' : ''}>{(item.entity as Task).dateText || '未定日期'}</span>{getSteps((item.entity as Task).bodyMarkdown).length > 0 && <span>{getSteps((item.entity as Task).bodyMarkdown).filter(step => step.checked).length}/{getSteps((item.entity as Task).bodyMarkdown).length} 步骤</span>}{query && <span>{(item.entity as Task).status === 'completed' ? '已完成' : '待办'}</span>}</>
                     : item.kind === 'quota' ? <span>{(item.entity as ApiQuota).kind} · {(item.entity as ApiQuota).balance || '余额未填'}{(item.entity as ApiQuota).recordedAt ? ' · ' + (item.entity as ApiQuota).recordedAt : ''}</span>
-                    : item.kind === 'subscription' ? <span className={expiryClass((item.entity as Subscription).expiresAt)}>{(item.entity as Subscription).plan || '未填套餐'}{(item.entity as Subscription).expiresAt ? ' · 到期 ' + (item.entity as Subscription).expiresAt + expiryLabel((item.entity as Subscription).expiresAt) : ''}</span>
-                    : <span>{fileSize((item.entity as Attachment).size)} · {dateTime((item.entity as Attachment).createdAt)}</span>}
+                    : <span className={expiryClass((item.entity as Subscription).expiresAt)}>{(item.entity as Subscription).plan || '未填套餐'}{(item.entity as Subscription).expiresAt ? ' · 到期 ' + (item.entity as Subscription).expiresAt + expiryLabel((item.entity as Subscription).expiresAt) : ''}</span>}
                 </span></span><ChevronRight className="row-arrow" size={16} />
               </button>
             </div>)}</div>}
         </section>
         {!wide && drawerOpen && <button className="drawer-backdrop" onClick={() => guarded(() => setDrawerOpen(false))} aria-label="关闭详情抽屉" />}
-        <aside ref={detailRef} className={'detail-pane ' + (drawerOpen ? 'drawer-open' : '')} aria-label="内容详情" role={!wide && drawerOpen ? 'dialog' : undefined} aria-modal={!wide && drawerOpen ? true : undefined}>{detail}</aside>
+        <aside ref={detailRef} className={'detail-pane panel ' + (drawerOpen ? 'drawer-open' : '')} aria-label="内容详情" role={!wide && drawerOpen ? 'dialog' : undefined} aria-modal={!wide && drawerOpen ? true : undefined}>{detail}</aside>
       </div>
     </main>
     <Confirm value={confirmation} onClose={() => setConfirmation(null)} />
     <DataManager open={dataOpen} onOpenChange={setDataOpen} onNotice={setNotice} onError={setError} onRestore={async (action) => {
-      setConfirmation({ title: '从完整备份恢复', message: '恢复将替换应用中的事项、记录、附件与服务条目。当前数据会先自动备份。', primary: '备份当前数据并恢复', action: () => operate(async () => { await action(); setDataOpen(false); setSelection(null); setQuery(''); setView('pending'); }, '备份已恢复，恢复前的数据另有自动备份。') });
+      setConfirmation({ title: '从完整备份恢复', message: '恢复将替换应用中的事项与服务条目。当前数据会先自动备份。', primary: '备份当前数据并恢复', action: () => operate(async () => { await action(); setDataOpen(false); setSelection(null); setQuery(''); setView('pending'); }, '备份已恢复，恢复前的数据另有自动备份。') });
     }} />
-    <LinkManager file={linkFile} state={state} busy={busy} onClose={() => setLinkFile(null)} onToggle={(type, id) => linkFile && void toggleLink(linkFile, type, id)} />
   </div>;
 }
 
@@ -468,25 +413,6 @@ function Progress({ body }: { body: string }) {
   const steps = getSteps(body), completed = steps.filter(step => step.checked).length;
   return <div className="step-progress"><div><span>检查步骤</span><span>{completed} / {steps.length}</span></div><div className="progress-track"><span style={{ width: completed / steps.length * 100 + '%' }} /></div></div>;
 }
-function FilePicker({ label = '添加附件', busy = false, onPick }: { label?: string; busy?: boolean; onPick: (files: File[]) => void }) {
-  const input = useRef<HTMLInputElement>(null);
-  return <><button className="button secondary" disabled={busy} onClick={() => input.current?.click()}><Upload size={15} /><span>{label}</span></button><input ref={input} type="file" hidden multiple onChange={event => { const files = [...(event.target.files || [])]; event.target.value = ''; if (files.length) onPick(files); }} /></>;
-}
-function AttachmentSection({ files, busy, onUpload, onManage }: { files: Attachment[]; busy: boolean; onUpload: (files: File[]) => void; onManage: () => void }) {
-  return <section className="related-section"><div className="section-heading"><h3>相关附件 <small>{files.length}</small></h3><FilePicker busy={busy} onPick={onUpload} /></div>{files.length ? files.map(file => <a className="attached-file" key={file.id} href={assetUrl('/api/attachments/' + file.id + '/download')}><FileText size={17} /><span>{file.filename}<small>{fileSize(file.size)}</small></span><Download size={15} /></a>) : <p className="muted">暂无附件，可添加本地文件。</p>}<button className="text-button manage-files" onClick={onManage}>查看全部附件<ArrowUpRight size={13} /></button></section>;
-}
-function LinkManager({ file, state, busy, onClose, onToggle }: { file: Attachment | null; state: State | null; busy: boolean; onClose: () => void; onToggle: (type: 'task' | 'note', id: string) => void }) {
-  const [tab, setTab] = useState<'task' | 'note'>('task');
-  const [search, setSearch] = useState('');
-  const owners = state ? (tab === 'task' ? state.tasks : state.notes).filter(owner => !owner.deletedAt && owner.title.toLocaleLowerCase().includes(search.toLocaleLowerCase())) : [];
-  return <Modal open={!!file} onOpenChange={open => !open && onClose()} title="管理附件关联" description={file?.filename + ' · 关联变更即时保存'}>
-    <div className="link-filters"><div className="segmented"><button className={tab === 'task' ? 'active' : ''} onClick={() => setTab('task')}>事项</button><button className={tab === 'note' ? 'active' : ''} onClick={() => setTab('note')}>记录</button></div><input className="plain-input" value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索关联内容" aria-label="搜索关联内容" /></div>
-    <div className="link-options">{owners.map(owner => {
-      const linked = state?.links.some(link => link.attachmentId === file?.id && link.ownerType === tab && link.ownerId === owner.id);
-      return <button key={owner.id} className={'link-option ' + (linked ? 'linked' : '')} disabled={busy} onClick={() => onToggle(tab, owner.id)} aria-pressed={linked}><span className="link-check">{linked ? <Check size={14} /> : <Plus size={14} />}</span><span>{owner.title}</span><small>{linked ? '已关联' : '关联'}</small></button>;
-    })}{!owners.length && <p className="muted">暂无可关联内容。</p>}</div>
-  </Modal>;
-}
 function DataManager({ open, onOpenChange, onNotice, onError, onRestore }: { open: boolean; onOpenChange: (open: boolean) => void; onNotice: (value: string) => void; onError: (value: string) => void; onRestore: (action: () => Promise<unknown>) => Promise<void> }) {
   const [backups, setBackups] = useState<Backup[]>([]);
   const [working, setWorking] = useState(false);
@@ -499,7 +425,7 @@ function DataManager({ open, onOpenChange, onNotice, onError, onRestore }: { ope
     try { await work(); } catch (failure) { onError((failure as Error).message); }
     finally { setWorking(false); }
   }
-  return <Modal open={open} onOpenChange={value => !working && onOpenChange(value)} title="备份与导出" description="完整备份包含数据库、附件、回收站与服务条目；Markdown 导出包含当前可见记录。">
+  return <Modal open={open} onOpenChange={value => !working && onOpenChange(value)} title="备份与导出" description="完整备份包含数据库与回收站内容；Markdown 导出包含当前可见记录。">
     <div className="data-action"><div><h3>导出 Markdown</h3><p>保留日期、正文、检查步骤与服务表，另存到独立导出目录。</p></div><button className="button secondary" disabled={working} onClick={() => void action(async () => { const result = await request<{ directory: string; downloadUrl: string }>('/api/export', 'POST'); setExported(result); onNotice('已另存到 ' + result.directory); })}><Download size={15} />导出</button></div>
     {exported && <div className="export-result"><span>{exported.directory}</span><a href={assetUrl(exported.downloadUrl)}>下载导出包<Download size={14} /></a></div>}
     <div className="data-action"><div><h3>完整备份</h3><p>备份文件保存在本机“备份”目录，可下载另存。</p></div><button className="button primary" disabled={working} onClick={() => void action(async () => { await request('/api/backups', 'POST'); await refresh(); onNotice('完整备份已保存'); })}><Archive size={15} />创建备份</button></div>
@@ -524,7 +450,7 @@ function ServiceEditor({ kind, initial, isNew, onSave, onCancel, onDirty }: {
   const [error, setError] = useState('');
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
   useEffect(() => onDirty(dirty), [dirty, onDirty]);
-  function setField<K extends string>(key: K, value: string) {
+  function setField(key: string, value: string) {
     setDraft(current => ({ ...current, [key]: value }));
   }
   async function save() {

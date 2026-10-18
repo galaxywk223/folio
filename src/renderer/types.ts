@@ -1,5 +1,5 @@
-export type Kind = 'task' | 'note' | 'attachment' | 'quota' | 'subscription';
-export type View = 'pending' | 'completed' | 'notes' | 'attachments' | 'quotas' | 'subscriptions' | 'trash';
+export type Kind = 'task' | 'quota' | 'subscription';
+export type View = 'pending' | 'completed' | 'quotas' | 'subscriptions' | 'trash';
 export type Task = {
   id: string; title: string; dateText: string; bodyMarkdown: string; status: 'pending' | 'completed';
   sortOrder: number; completedAt: string | null; createdAt: string; updatedAt: string; deletedAt: string | null; version: number;
