@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import updaterPackage from 'electron-updater'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -36,6 +36,8 @@ if (!gotLock) {
 }
 
 async function start(): Promise<void> {
+  Menu.setApplicationMenu(null)
+
   const running = await startServer(dataRoot, undefined, { allowDevOrigins: true })
   closeServer = running.close
   apiPort = running.port
