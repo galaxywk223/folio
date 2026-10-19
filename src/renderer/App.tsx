@@ -125,7 +125,18 @@ export default function App() {
     }
     if (view === 'trash') return all.filter(item => item.entity.deletedAt).sort((a, b) => b.entity.deletedAt!.localeCompare(a.entity.deletedAt!));
     if (view === 'pending' || view === 'completed') return all.filter(item => !item.entity.deletedAt && item.kind === 'task' && (item.entity as Task).status === view);
-    if (view === 'quotas') return all.filter(item => !item.entity.deletedAt && item.kind === 'quota');
+    if (view === 'quotas') {
+      return all
+        .filter(item => !item.entity.deletedAt && item.kind === 'quota')
+        .sort((a, b) => {
+          const aVal = parseBalance((a.entity as ApiQuota).balance);
+          const bVal = parseBalance((b.entity as ApiQuota).balance);
+          if (aVal === null && bVal === null) return a.title.localeCompare(b.title);
+          if (aVal === null) return 1;
+          if (bVal === null) return -1;
+          return bVal - aVal;
+        });
+    }
     if (view === 'subscriptions') return all.filter(item => !item.entity.deletedAt && item.kind === 'subscription');
     return [];
   }, [state, view, query]);
@@ -298,7 +309,7 @@ export default function App() {
       {notice && <div className="notice" role="status"><Check size={15} /><span>{notice}</span><button className="icon-button" onClick={() => setNotice('')} aria-label="关闭提示"><X size={14} /></button></div>}
       <div className="content-grid">
         <section ref={listRef} className="list-pane panel" aria-label="内容列表" onScroll={event => { scrollPositions.current[effectiveView] = event.currentTarget.scrollTop; }}>
-          <div className="list-heading"><span>{items.length} 项内容</span><span>{busy ? <><Loader2 className="spinning" size={13} />正在保存</> : query.trim() ? '全部记录' : view === 'trash' ? '最近删除在前' : view === 'subscriptions' ? '按到期排序' : view === 'quotas' ? '按平台排序' : '按日期排序'}</span></div>
+          <div className="list-heading"><span>{items.length} 项内容</span>{busy && <span><Loader2 className="spinning" size={13} />正在保存</span>}</div>
           {!state ? <Empty title={error ? '暂时无法读取数据' : '正在读取本地记录'} text={error ? '本地服务恢复后可重新读取，编辑内容不会清空。' : '正在连接本机服务。'} action={error ? () => void load().catch(failure => setError(failure.message)) : undefined} actionLabel="重新读取" icon={<Loader2 size={25} className={error ? '' : 'spinning'} />} /> :
             !items.length ? <Empty
               title={query.trim() ? '没有找到匹配内容' : view === 'pending' ? '待办列表为空' : view === 'completed' ? '还没有已完成事项' : view === 'quotas' ? '还没有额度记录' : view === 'subscriptions' ? '还没有订阅记录' : '回收站为空'}
@@ -333,6 +344,13 @@ export default function App() {
       setConfirmation({ title: '从完整备份恢复', message: '恢复将替换应用中的事项与服务条目。当前数据会先自动备份。', primary: '备份当前数据并恢复', action: () => operate(async () => { await action(); setDataOpen(false); setSelection(null); setQuery(''); setView('pending'); }, '备份已恢复，恢复前的数据另有自动备份。') });
     }} />
   </div>;
+}
+
+function parseBalance(text: string) {
+  const match = text.replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const value = Number(match[0]);
+  return Number.isFinite(value) ? value : null;
 }
 
 function FolioMark() {
