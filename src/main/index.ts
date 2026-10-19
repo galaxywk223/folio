@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from 'electron'
 import updaterPackage from 'electron-updater'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -88,7 +88,7 @@ async function createWindow(): Promise<BrowserWindow> {
     height: 820,
     minWidth: 960,
     minHeight: 640,
-    backgroundColor: '#f7f8fa',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#141416' : '#f4f3f0',
     show: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),

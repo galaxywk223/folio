@@ -32,3 +32,4 @@ export type SubscriptionDraft = {
   expiresAt: string; entryUrl: string; note: string; version?: number;
 };
 export type Backup = { id: string; filename: string; createdAt: string; size: number };
+export type Item = Selection & { title: string; subtitle: string; entity: Task | ApiQuota | Subscription };
