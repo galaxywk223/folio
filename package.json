@@ -1,6 +1,6 @@
 {
   "name": "folio",
-  "version": "1.0.3",
+  "version": "1.0.4",
     "private": false,
   "description": "Folio — local desk for tasks and subscriptions",
   "author": "Wang Kai",
@@ -23,6 +23,7 @@
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "node --test scripts/subscriptions.test.mjs",
     "dist": "npm run build && electron-builder --win nsis --x64 --publish never",
     "dist:publish": "npm run build && electron-builder --win nsis --x64 --publish always",
     "icon": "node scripts/generate-icon.mjs",

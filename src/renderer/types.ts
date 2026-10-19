@@ -1,3 +1,5 @@
+import type { SubscriptionCategory } from '../shared/subscriptions';
+
 export type Kind = 'task' | 'quota' | 'subscription';
 export type View = 'pending' | 'completed' | 'quotas' | 'subscriptions' | 'trash';
 export type Task = {
@@ -13,6 +15,7 @@ export type ApiQuota = {
 };
 export type Subscription = {
   id: string; service: string; account: string; plan: string; benefits: string; status: string; cost: string;
+  category: SubscriptionCategory; autoRenew: boolean | null;
   expiresAt: string; entryUrl: string; note: string; createdAt: string; updatedAt: string; deletedAt: string | null; version: number;
 };
 export type State = {
@@ -25,6 +28,7 @@ export type EditorValue = { title: string; dateText?: string; bodyMarkdown: stri
 export type QuotaDraft = { kind: '官方' | '中转'; platform: string; entryUrl: string; balance: string; recordedAt: string; note: string; version?: number };
 export type SubscriptionDraft = {
   service: string; account: string; plan: string; benefits: string; status: string; cost: string;
+  category: SubscriptionCategory; autoRenew: boolean | null;
   expiresAt: string; entryUrl: string; note: string; version?: number;
 };
 export type Backup = { id: string; filename: string; createdAt: string; size: number };
