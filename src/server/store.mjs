@@ -348,27 +348,6 @@ export class Store {
       .run(service, account, plan, benefits, status, cost, expiresAt, entryUrl, note, now(), id);
     return this.subscription(id);
   }
-  seedServices(quotas = [], subscriptions = []) {
-    let added = { quotas: 0, subscriptions: 0 };
-    this.transaction(() => {
-      for (const item of quotas) {
-        const exists = this.db.prepare('SELECT id FROM api_quotas WHERE deleted_at IS NULL AND platform=? COLLATE NOCASE').get(item.platform);
-        if (exists) continue;
-        this.insertQuota(item);
-        added.quotas++;
-      }
-      for (const item of subscriptions) {
-        const exists = this.db.prepare('SELECT id FROM subscriptions WHERE deleted_at IS NULL AND service=? COLLATE NOCASE AND account=? COLLATE NOCASE').get(item.service, item.account || '');
-        if (exists) continue;
-        this.insertSubscription(item);
-        added.subscriptions++;
-      }
-      if (!this.db.prepare("SELECT value FROM settings WHERE key='services_seeded'").get()) {
-        this.db.prepare('INSERT INTO settings VALUES(?,?)').run('services_seeded', now());
-      }
-    });
-    return added;
-  }
   deleteEntity(type, id, input = {}) {
     const table = { task: 'tasks', note: 'notes', attachment: 'attachments', quota: 'api_quotas', subscription: 'subscriptions' }[type];
     if (!table) throw new AppError('对象类型无效。');

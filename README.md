@@ -31,4 +31,4 @@ npm run dist:publish  # 构建并发布到 GitHub Releases
 
 ## Migration
 
-On first launch Folio copies SQLite and attachments from Desktop `日常事务` when present, and seeds API quotas / subscriptions from the former `网站与服务` records.
+On first launch Folio copies SQLite and attachments from Desktop `日常事务` when present. Existing API quotas and subscriptions are preserved; new databases start with empty quota and subscription lists, populated only by manually entered records.

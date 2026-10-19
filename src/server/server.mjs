@@ -5,7 +5,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { Store, AppError } from './store.mjs';
-import { DEFAULT_QUOTAS, DEFAULT_SUBSCRIPTIONS } from './seed.mjs';
 import { migrateFromDesktop, defaultLegacyRoots } from './migrate.mjs';
 
 export function createApp(store, options = {}) {
@@ -133,9 +132,6 @@ export async function startServer(root, requestedPort, options = {}) {
   }
   try {
     store = new Store(root);
-    if (!store.db.prepare("SELECT value FROM settings WHERE key='services_seeded'").get()) {
-      store.seedServices(DEFAULT_QUOTAS, DEFAULT_SUBSCRIPTIONS);
-    }
     const app = createApp(store, options);
     const candidates = requestedPort === undefined ? Array.from({ length: 20 }, (_, i) => 47841 + i) : [requestedPort];
     let selectedPort;
