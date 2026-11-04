@@ -1,38 +1,98 @@
 # Folio
 
-Local desk for tasks and subscriptions. Windows Electron app that merges daily affairs (todos, notes, attachments) with structured API quotas and subscription tracking.
+Folio 是一个 Windows 桌面应用，把日常待办、额度和订阅集中在一个窗口里管理。所有数据都存在本机的 SQLite 数据库中，不需要注册账号，也不依赖任何云服务。
 
-## Features
+[下载最新版](https://github.com/galaxywk223/folio/releases/latest) · [更新日志](CHANGELOG.md) · [问题反馈](https://github.com/galaxywk223/folio/issues)
 
-- Tasks, notes, attachments, recycle bin, backup/export
-- API quotas (official / relay) with balance and entry links
-- Subscriptions grouped as AI, network, or other, with expiry highlighting (≤14 days) and recorded auto-renewal status
-- Local SQLite storage, no account required
+## 功能
 
-## Development
+- **待办**：有日期的事项排在前面，未定日期的随后；正文支持 Markdown，复选框会作为步骤勾选。完成的事项归档到「已完成」，步骤记录保留。
+- **额度**：记录各平台的余额、入口链接和备注。按分类（AI / 网络 / 其他）筛选，用「官方 / 中转」区分来源，列表按余额从高到低排序。
+- **订阅**：记录套餐、权益、费用、到期日和自动续费状态，分类同样是 AI / 网络 / 其他。按到期日排序，14 天内到期的会高亮。自动续费只是一条记录，不会触发任何付款或续费。
+- **回收站**：删除的条目可以随时恢复。
+- **备份与导出**：一键生成带校验的完整备份（zip），也能从备份恢复，恢复前会自动备份当前数据。还可以把全部内容导出为 Markdown。
+- **搜索**：`Ctrl+K` 同时搜索事项、额度和订阅。
+- **自动更新**：安装版从 GitHub Releases 检查并安装新版本。
+- 支持浅色和深色主题，跟随系统设置。
+
+## 安装
+
+1. 从 [Releases](https://github.com/galaxywk223/folio/releases/latest) 下载 `Folio-Setup-<版本>.exe`。
+2. 运行安装程序。默认按当前用户安装，并创建桌面和开始菜单快捷方式。
+3. 之后有新版本时，应用会在侧栏提示更新。
+
+系统要求：Windows 10/11 x64。
+
+## 数据存储
+
+| 场景 | 位置 |
+|---|---|
+| 安装版 | `%LOCALAPPDATA%\Folio` |
+| 开发环境 | 项目下的 `./data` |
+
+目录里有数据库（`app/data/folio.sqlite`），以及 `附件`、`备份`、`导出` 等子目录。卸载时不会删除这些数据。
+
+首次启动时，如果桌面上有旧版「日常事务」目录，Folio 会把其中的 SQLite 数据库和附件复制过来。已有的额度和订阅记录会保留；新建的数据库从空列表开始，只包含手动录入的记录。
+
+### 数据库版本
+
+| 版本 | 变更 |
+|---|---|
+| 1 | 旧版「日常事务」：事项、随手记、附件 |
+| 2 | 新增额度与订阅表 |
+| 3 | 订阅新增分类与自动续费状态；旧订阅归为 AI，自动续费记为「未记录」 |
+| 4 | 额度新增分类；旧额度归为 AI |
+
+应用启动时会自动把数据库升级到最新版本，也能恢复 Folio 2–4 版本的备份和旧版「日常事务」版本 1 的备份。
+
+## 开发
+
+需要 Node.js ≥ 22.12 和 npm ≥ 10。
 
 ```bash
 npm install
-npm run icon
-npm run dev
+npm run icon   # 生成应用图标
+npm run dev    # 以开发模式启动
 ```
-
-Data during development is stored under `./data`. Packaged installs use `%LOCALAPPDATA%\Folio`.
-
-`npm test` checks subscription migration, API fields, category filtering, recycle-bin behavior, backups, and Markdown export without opening the app.
-
-## Build
 
 ```bash
-npm run build
-npm run dist          # 本地安装包，不发布
-npm run dist:publish  # 构建并发布到 GitHub Releases
+npm test       # 数据库迁移、额度/订阅字段、分类筛选、回收站、备份与导出相关测试，不需要打开应用
+npm run typecheck
 ```
 
-安装版会通过 GitHub Releases 自动检查更新；开发态侧栏会提示「仅正式安装版支持应用内更新」。
+技术栈：Electron + React + TypeScript（electron-vite 构建），本地服务用 Express，存储用 Node 内置的 `node:sqlite`，打包和自动更新用 electron-builder / electron-updater。
 
-## Migration
+```
+src/
+  main/       Electron 主进程与自动更新
+  preload/    预加载脚本
+  server/     本地 HTTP 服务、数据存储与迁移
+  renderer/   React 界面
+  shared/     主进程与界面共用的逻辑（分类、Markdown 解析、更新状态）
+scripts/      图标生成与测试
+```
 
-On first launch Folio copies SQLite and attachments from Desktop `日常事务` when present. Existing API quotas and subscriptions are preserved; new databases start with empty quota and subscription lists, populated only by manually entered records.
+## 构建与发布
 
-Database version 3 adds subscription categories and nullable auto-renewal status. Earlier subscription records migrate to AI with auto-renewal unrecorded. The application restores Folio version 2 and 3 backups and legacy daily-affairs version 1 backups. Auto-renewal status is informational and does not trigger payments or renewals.
+```bash
+npm run build          # 类型检查并构建
+npm run dist           # 生成本地安装包到 release/，不发布
+```
+
+发布新版本：
+
+1. 修改 `package.json` 里的 `version`，并在 `CHANGELOG.md` 中补上对应的更新内容。
+2. 提交并推送到 `main`。
+3. 设置 GitHub token 后运行发布命令，会创建 Release 草稿并上传安装包和 `latest.yml`：
+
+   ```bash
+   GH_TOKEN=$(gh auth token) npm run dist:publish
+   ```
+
+4. 在 GitHub 上填写发布说明，然后正式发布草稿。
+
+开发环境下侧栏会提示「仅正式安装版支持应用内更新」。
+
+## 许可证
+
+[MIT](LICENSE) © Wang Kai

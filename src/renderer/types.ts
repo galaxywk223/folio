@@ -1,4 +1,4 @@
-import type { SubscriptionCategory } from '../shared/subscriptions';
+import type { ServiceCategory, SubscriptionCategory } from '../shared/subscriptions';
 
 export type Kind = 'task' | 'quota' | 'subscription';
 export type View = 'pending' | 'completed' | 'quotas' | 'subscriptions' | 'trash';
@@ -10,7 +10,7 @@ export type Note = { id: string; title: string; bodyMarkdown: string; createdAt:
 export type Attachment = { id: string; filename: string; storagePath: string; size: number; createdAt: string; deletedAt: string | null };
 export type Link = { attachmentId: string; ownerType: 'task' | 'note'; ownerId: string };
 export type ApiQuota = {
-  id: string; kind: '官方' | '中转'; platform: string; entryUrl: string; balance: string; recordedAt: string;
+  id: string; kind: '官方' | '中转'; category: ServiceCategory; platform: string; entryUrl: string; balance: string; recordedAt: string;
   note: string; createdAt: string; updatedAt: string; deletedAt: string | null; version: number;
 };
 export type Subscription = {
@@ -25,7 +25,7 @@ export type State = {
 };
 export type Selection = { kind: Kind; id: string };
 export type EditorValue = { title: string; dateText?: string; bodyMarkdown: string; version?: number };
-export type QuotaDraft = { kind: '官方' | '中转'; platform: string; entryUrl: string; balance: string; recordedAt: string; note: string; version?: number };
+export type QuotaDraft = { kind: '官方' | '中转'; category: ServiceCategory; platform: string; entryUrl: string; balance: string; recordedAt: string; note: string; version?: number };
 export type SubscriptionDraft = {
   service: string; account: string; plan: string; benefits: string; status: string; cost: string;
   category: SubscriptionCategory; autoRenew: boolean | null;

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { AlertCircle, Save, X } from 'lucide-react';
-import { subscriptionCategories } from '../../shared/subscriptions';
-import type { SubscriptionCategory } from '../../shared/subscriptions';
+import { serviceCategories } from '../../shared/subscriptions';
+import type { ServiceCategory } from '../../shared/subscriptions';
 import type { QuotaDraft, SubscriptionDraft } from '../types';
+
+const categoryOptions = Object.entries(serviceCategories).map(([value, label]) => <option key={value} value={value}>{label}</option>);
 
 function Field({ id, label, wide, children }: { id: string; label: string; wide?: boolean; children: React.ReactNode }) {
   return <div className={'field' + (wide ? ' wide' : '')}><label className="field-label" htmlFor={id}>{label}</label>{children}</div>;
@@ -43,7 +45,12 @@ export function ServiceEditor({ kind, initial, isNew, onSave, onCancel, onDirty 
         <div className="field wide"><span className="field-label">类型</span>
           <div className="segmented" role="group" aria-label="额度类型">{(['官方', '中转'] as const).map(value => <button key={value} className={quota.kind === value ? 'active' : ''} aria-pressed={quota.kind === value} onClick={() => setField('kind', value)}>{value}</button>)}</div>
         </div>
-        <Field id="q-platform" label="平台" wide>{text('q-platform', 'platform', quota.platform, { autoFocus: true })}</Field>
+        <Field id="q-platform" label="平台">{text('q-platform', 'platform', quota.platform, { autoFocus: true })}</Field>
+        <Field id="q-category" label="分类">
+          <select id="q-category" className="input" value={quota.category} onChange={e => setField('category', e.target.value as ServiceCategory)} disabled={saving}>
+            {categoryOptions}
+          </select>
+        </Field>
         <Field id="q-balance" label="余额">{text('q-balance', 'balance', quota.balance)}</Field>
         <Field id="q-date" label="记录日期">{text('q-date', 'recordedAt', quota.recordedAt, { type: 'date' })}</Field>
         <Field id="q-url" label="入口 URL" wide>{text('q-url', 'entryUrl', quota.entryUrl, { placeholder: 'https://' })}</Field>
@@ -51,8 +58,8 @@ export function ServiceEditor({ kind, initial, isNew, onSave, onCancel, onDirty 
       </> : <>
         <Field id="s-service" label="服务" wide>{text('s-service', 'service', sub.service, { autoFocus: true })}</Field>
         <Field id="s-category" label="分类">
-          <select id="s-category" className="input" value={sub.category} onChange={e => setField('category', e.target.value as SubscriptionCategory)} disabled={saving}>
-            {Object.entries(subscriptionCategories).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          <select id="s-category" className="input" value={sub.category} onChange={e => setField('category', e.target.value as ServiceCategory)} disabled={saving}>
+            {categoryOptions}
           </select>
         </Field>
         <Field id="s-account" label="账号">{text('s-account', 'account', sub.account)}</Field>

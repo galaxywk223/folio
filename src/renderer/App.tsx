@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Check, FileText, X } from 'lucide-react';
 import { getSteps } from '../shared/markdown';
-import { subscriptionCategories, matchesSubscriptionFilter } from '../shared/subscriptions';
-import type { SubscriptionFilter } from '../shared/subscriptions';
+import { serviceCategories, matchesServiceFilter } from '../shared/subscriptions';
+import type { ServiceFilter } from '../shared/subscriptions';
 import { request } from './api';
 import { Confirm, Editor, Empty } from './components';
 import type { Confirmation, EditorHandle } from './components';
@@ -17,12 +17,12 @@ import { Sidebar } from './ui/Sidebar';
 import { Topbar } from './ui/Topbar';
 
 const viewTitles: Record<View, string> = {
-  pending: '待办', completed: '已完成', quotas: 'API 额度', subscriptions: '订阅', trash: '回收站',
+  pending: '待办', completed: '已完成', quotas: '额度', subscriptions: '订阅', trash: '回收站',
 };
 const viewDescriptions: Record<View, string> = {
   pending: '有日期事项在前，未定日期事项随后。',
   completed: '保留每件事项的说明与步骤记录。',
-  quotas: '官方与中转 API 余额、入口与备注。',
+  quotas: '按分类记录官方与中转额度、入口与备注。',
   subscriptions: '按到期日排序；14 天内到期会高亮提醒。',
   trash: '恢复已删除的事项与服务条目。',
 };
@@ -31,13 +31,14 @@ type Editing =
   | { kind: 'quota'; id: string | null; initial: QuotaDraft }
   | { kind: 'subscription'; id: string | null; initial: SubscriptionDraft };
 
-const emptyQuota: QuotaDraft = { kind: '官方', platform: '', entryUrl: '', balance: '', recordedAt: '', note: '' };
+const emptyQuota: QuotaDraft = { kind: '官方', category: 'other', platform: '', entryUrl: '', balance: '', recordedAt: '', note: '' };
 const emptySubscription: SubscriptionDraft = { service: '', category: 'other', autoRenew: null, account: '', plan: '', benefits: '', status: '', cost: '', expiresAt: '', entryUrl: '', note: '' };
 
 export default function App() {
   const [state, setState] = useState<State | null>(null);
   const [view, setView] = useState<View>('pending');
-  const [subscriptionFilter, setSubscriptionFilter] = useState<SubscriptionFilter>('all');
+  const [subscriptionFilter, setSubscriptionFilter] = useState<ServiceFilter>('all');
+  const [quotaFilter, setQuotaFilter] = useState<ServiceFilter>('all');
   const [query, setQuery] = useState('');
   const [selection, setSelection] = useState<Selection | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
@@ -54,7 +55,7 @@ export default function App() {
   const searchRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<EditorHandle>(null);
   const scrollPositions = useRef<Record<string, number>>({});
-  const effectiveView = query.trim() ? 'search' : view === 'subscriptions' ? 'subscriptions-' + subscriptionFilter : view;
+  const effectiveView = query.trim() ? 'search' : view === 'subscriptions' ? 'subscriptions-' + subscriptionFilter : view === 'quotas' ? 'quotas-' + quotaFilter : view;
 
   const load = useCallback(async () => {
     const result = await request<State>('/api/state');
@@ -117,8 +118,8 @@ export default function App() {
         const hay = [
           item.title, item.subtitle,
           'bodyMarkdown' in item.entity ? item.entity.bodyMarkdown : '',
-          'platform' in item.entity ? item.entity.platform + item.entity.balance + item.entity.note : '',
-          'service' in item.entity ? item.entity.service + item.entity.account + item.entity.plan + item.entity.note + item.entity.status + subscriptionCategories[item.entity.category] : '',
+          'platform' in item.entity ? item.entity.platform + item.entity.balance + item.entity.note + serviceCategories[item.entity.category] : '',
+          'service' in item.entity ? item.entity.service + item.entity.account + item.entity.plan + item.entity.note + item.entity.status + serviceCategories[item.entity.category] : '',
         ].join('\n').toLocaleLowerCase();
         return hay.includes(keyword);
       });
@@ -127,7 +128,7 @@ export default function App() {
     if (view === 'pending' || view === 'completed') return all.filter(item => !item.entity.deletedAt && item.kind === 'task' && (item.entity as Task).status === view);
     if (view === 'quotas') {
       return all
-        .filter(item => !item.entity.deletedAt && item.kind === 'quota')
+        .filter(item => item.kind === 'quota' && matchesServiceFilter(item.entity as ApiQuota, quotaFilter))
         .sort((a, b) => {
           const aVal = parseBalance((a.entity as ApiQuota).balance);
           const bVal = parseBalance((b.entity as ApiQuota).balance);
@@ -137,9 +138,9 @@ export default function App() {
           return bVal - aVal;
         });
     }
-    if (view === 'subscriptions') return all.filter(item => item.kind === 'subscription' && matchesSubscriptionFilter(item.entity as Subscription, subscriptionFilter));
+    if (view === 'subscriptions') return all.filter(item => item.kind === 'subscription' && matchesServiceFilter(item.entity as Subscription, subscriptionFilter));
     return [];
-  }, [state, view, query, subscriptionFilter]);
+  }, [state, view, query, subscriptionFilter, quotaFilter]);
   useEffect(() => {
     if (editing) return;
     if (!selection || !items.some(item => item.id === selection.id && item.kind === selection.kind)) {
@@ -182,7 +183,7 @@ export default function App() {
     guarded(() => {
       setEditing({
         kind: 'quota', id: entity?.id || null,
-        initial: entity ? { kind: entity.kind, platform: entity.platform, entryUrl: entity.entryUrl, balance: entity.balance, recordedAt: entity.recordedAt, note: entity.note, version: entity.version } : { ...emptyQuota },
+        initial: entity ? { kind: entity.kind, category: entity.category, platform: entity.platform, entryUrl: entity.entryUrl, balance: entity.balance, recordedAt: entity.recordedAt, note: entity.note, version: entity.version } : { ...emptyQuota },
       });
       setDrawerOpen(true);
     });
@@ -210,7 +211,9 @@ export default function App() {
   async function saveQuota(value: QuotaDraft) {
     if (!editing || editing.kind !== 'quota') return;
     const record = await request<ApiQuota>('/api/quotas' + (editing.id ? '/' + editing.id : ''), editing.id ? 'PATCH' : 'POST', value);
-    setEditing(null); setDirty(false); setQuery(''); setView('quotas'); setSelection({ kind: 'quota', id: record.id }); setNotice('已保存');
+    setEditing(null); setDirty(false); setQuery(''); setView('quotas');
+    if (quotaFilter !== 'all' && quotaFilter !== record.category) setQuotaFilter(record.category);
+    setSelection({ kind: 'quota', id: record.id }); setNotice('已保存');
     void load().catch(failure => setError('内容已经保存，列表刷新失败：' + failure.message));
   }
   async function saveSubscription(value: SubscriptionDraft) {
@@ -269,9 +272,9 @@ export default function App() {
       <div className="content-grid">
         <ItemList
           listRef={listRef} loaded={!!state} error={error} items={items} view={view} searching={searching}
-          selection={selection} busy={busy} filtersLocked={!!editing} subscriptionFilter={subscriptionFilter}
+          selection={selection} busy={busy} filtersLocked={!!editing} filter={view === 'quotas' ? quotaFilter : subscriptionFilter}
           header={state && !searching ? view === 'subscriptions' ? <SubscriptionOverview items={state.subscriptions} /> : view === 'quotas' ? <QuotaOverview items={state.quotas} /> : undefined : undefined}
-          onFilter={category => guarded(() => { setSubscriptionFilter(category); setSelection(null); setDrawerOpen(false); })}
+          onFilter={category => guarded(() => { if (view === 'quotas') setQuotaFilter(category); else setSubscriptionFilter(category); setSelection(null); setDrawerOpen(false); })}
           onChoose={choose} onNew={newAction?.run} onClearSearch={() => setQuery('')}
           onReload={() => void load().catch(failure => setError(failure.message))}
           onScroll={event => { scrollPositions.current[effectiveView] = event.currentTarget.scrollTop; }}

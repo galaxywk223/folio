@@ -1,8 +1,8 @@
 import type { RefObject, UIEvent } from 'react';
 import { Archive, CalendarDays, CheckCircle2, Circle, CreditCard, KeyRound, ListChecks, Loader2, Trash2, Wallet } from 'lucide-react';
 import { getSteps } from '../../shared/markdown';
-import { subscriptionCategories } from '../../shared/subscriptions';
-import type { SubscriptionFilter } from '../../shared/subscriptions';
+import { serviceCategories } from '../../shared/subscriptions';
+import type { ServiceFilter } from '../../shared/subscriptions';
 import { dateTime } from '../api';
 import { Empty } from '../components';
 import { expiryClass, expiryLabel, expiryUrgent } from '../format';
@@ -20,17 +20,17 @@ const emptyIcons: Record<View, React.ReactNode> = {
   subscriptions: <CreditCard size={26} />, trash: <Trash2 size={26} />,
 };
 
-export function ItemList({ listRef, loaded, error, items, view, searching, selection, busy, filtersLocked, subscriptionFilter, header, onFilter, onChoose, onNew, onClearSearch, onReload, onScroll }: {
+export function ItemList({ listRef, loaded, error, items, view, searching, selection, busy, filtersLocked, filter, header, onFilter, onChoose, onNew, onClearSearch, onReload, onScroll }: {
   listRef: RefObject<HTMLElement | null>; loaded: boolean; error: string; items: Item[]; view: View; searching: boolean;
-  selection: Selection | null; busy: boolean; filtersLocked: boolean; subscriptionFilter: SubscriptionFilter; header?: React.ReactNode;
-  onFilter: (filter: SubscriptionFilter) => void; onChoose: (item: Item) => void; onNew?: () => void;
+  selection: Selection | null; busy: boolean; filtersLocked: boolean; filter: ServiceFilter; header?: React.ReactNode;
+  onFilter: (filter: ServiceFilter) => void; onChoose: (item: Item) => void; onNew?: () => void;
   onClearSearch: () => void; onReload: () => void; onScroll: (event: UIEvent<HTMLElement>) => void;
 }) {
   const inTrash = view === 'trash' && !searching;
   return <section ref={listRef} className="list-pane card" aria-label="内容列表" onScroll={onScroll}>
     {header}
-    {view === 'subscriptions' && !searching && <div className="list-filters"><div className="segmented" role="group" aria-label="订阅分类">
-      {(['all', ...Object.keys(subscriptionCategories)] as SubscriptionFilter[]).map(category => <button key={category} className={subscriptionFilter === category ? 'active' : ''} aria-pressed={subscriptionFilter === category} disabled={filtersLocked || busy} onClick={() => onFilter(category)}>{category === 'all' ? '全部' : subscriptionCategories[category]}</button>)}
+    {(view === 'subscriptions' || view === 'quotas') && !searching && <div className="list-filters"><div className="segmented" role="group" aria-label={view === 'quotas' ? '额度分类' : '订阅分类'}>
+      {(['all', ...Object.keys(serviceCategories)] as ServiceFilter[]).map(category => <button key={category} className={filter === category ? 'active' : ''} aria-pressed={filter === category} disabled={filtersLocked || busy} onClick={() => onFilter(category)}>{category === 'all' ? '全部' : serviceCategories[category]}</button>)}
     </div></div>}
     <div className="list-heading"><span>{items.length} 项内容</span>{busy && <span><Loader2 className="spinning" size={13} />正在保存</span>}</div>
     {!loaded ? <Empty title={error ? '暂时无法读取数据' : '正在读取本地记录'} text={error ? '本地服务恢复后可重新读取，编辑内容不会清空。' : '正在连接本机服务。'} action={error ? onReload : undefined} actionLabel="重新读取" icon={<Loader2 size={25} className={error ? '' : 'spinning'} />} />
@@ -75,13 +75,14 @@ function RowMeta({ item, searching }: { item: Item; searching: boolean }) {
   if (item.kind === 'quota') {
     const quota = item.entity as ApiQuota;
     return <>
+      <span className="badge">{serviceCategories[quota.category]}</span>
       <span className="badge">{quota.kind}</span>
       {quota.recordedAt && <span>记录于 {quota.recordedAt}</span>}
     </>;
   }
   const sub = item.entity as Subscription;
   return <>
-    <span className="badge">{subscriptionCategories[sub.category]}</span>
+    <span className="badge">{serviceCategories[sub.category]}</span>
     <span>{sub.plan || '未填套餐'}</span>
     {sub.expiresAt && <span className={'badge ' + expiryClass(sub.expiresAt)}><CalendarDays size={12} />{sub.expiresAt}{expiryLabel(sub.expiresAt)}</span>}
   </>;

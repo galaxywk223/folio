@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { DatabaseSync, backup } from 'node:sqlite';
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
 import { parseTasks, parseNotes, getSteps, toggleStep, compareTasks } from '../shared/markdown.js';
-import { subscriptionCategories, isSubscriptionCategory, autoRenewLabel } from '../shared/subscriptions.js';
+import { serviceCategories, isServiceCategory, autoRenewLabel } from '../shared/subscriptions.js';
 
 export class AppError extends Error {
   constructor(message, status = 400, code = 'INVALID_REQUEST') {
@@ -19,7 +19,9 @@ const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const taskColumns = 'id,title,date_text AS dateText,body_markdown AS bodyMarkdown,status,sort_order AS sortOrder,completed_at AS completedAt,created_at AS createdAt,updated_at AS updatedAt,deleted_at AS deletedAt,version';
 const noteColumns = 'id,title,body_markdown AS bodyMarkdown,created_at AS createdAt,updated_at AS updatedAt,deleted_at AS deletedAt,version';
 const fileColumns = 'id,filename,storage_path AS storagePath,size,created_at AS createdAt,deleted_at AS deletedAt';
-const quotaColumns = 'id,kind,platform,entry_url AS entryUrl,balance,recorded_at AS recordedAt,note,created_at AS createdAt,updated_at AS updatedAt,deleted_at AS deletedAt,version';
+const legacyQuotaColumns = 'id,kind,platform,entry_url AS entryUrl,balance,recorded_at AS recordedAt,note,created_at AS createdAt,updated_at AS updatedAt,deleted_at AS deletedAt,version';
+const quotaColumns = legacyQuotaColumns + ',category';
+const SCHEMA_VERSION = 4;
 const legacySubColumns = 'id,service,account,plan,benefits,status,cost,expires_at AS expiresAt,entry_url AS entryUrl,note,created_at AS createdAt,updated_at AS updatedAt,deleted_at AS deletedAt,version';
 const subColumns = legacySubColumns + ',category,auto_renew AS autoRenew';
 
@@ -27,6 +29,7 @@ const SERVICE_TABLES = `
 CREATE TABLE IF NOT EXISTS api_quotas(
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL CHECK(kind IN ('官方','中转')),
+  category TEXT NOT NULL DEFAULT 'other' CHECK(category IN ('ai','network','other')),
   platform TEXT NOT NULL,
   entry_url TEXT NOT NULL DEFAULT '',
   balance TEXT NOT NULL DEFAULT '',
@@ -109,8 +112,8 @@ function compareSubscriptions(a, b) {
   const bExp = b.expiresAt || '9999-12-31';
   return aExp.localeCompare(bExp) || a.service.localeCompare(b.service) || a.account.localeCompare(b.account);
 }
-function subscriptionCategory(value) {
-  if (!isSubscriptionCategory(value)) throw new AppError('订阅分类应为「AI」「网络」或「其他」。');
+function serviceCategory(value, label) {
+  if (!isServiceCategory(value)) throw new AppError(label + '分类应为「AI」「网络」或「其他」。');
   return value;
 }
 function autoRenewValue(value) {
@@ -142,7 +145,7 @@ export class Store {
         'CREATE TABLE attachments(id TEXT PRIMARY KEY,filename TEXT NOT NULL,storage_path TEXT UNIQUE NOT NULL,size INTEGER NOT NULL,created_at TEXT NOT NULL,deleted_at TEXT);' +
         'CREATE TABLE attachment_links(attachment_id TEXT NOT NULL REFERENCES attachments(id),owner_type TEXT NOT NULL CHECK(owner_type IN (\'task\',\'note\')),owner_id TEXT NOT NULL,PRIMARY KEY(attachment_id,owner_type,owner_id));' +
         SERVICE_TABLES +
-        "INSERT INTO settings VALUES('schema_version','3');"
+        "INSERT INTO settings VALUES('schema_version','" + SCHEMA_VERSION + "');"
       );
     }
     if (!this.db.prepare("SELECT value FROM settings WHERE key='migration_complete'").get()) this.bootstrapSources();
@@ -153,16 +156,21 @@ export class Store {
   }
   ensureSchema() {
     const version = this.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get();
-    if (version?.value === '3') return;
-    if (!['1', '2'].includes(version?.value)) throw new Error('数据库版本不受支持，原数据已保留。');
+    if (version?.value === String(SCHEMA_VERSION)) return;
+    if (!['1', '2', '3'].includes(version?.value)) throw new Error('数据库版本不受支持，原数据已保留。');
     this.transaction(() => {
+      // v1 没有服务表，直接按最新结构建表；v2/v3 逐级补列，已有记录归为 AI。
       if (version.value === '1') this.db.exec(SERVICE_TABLES);
       else {
-        this.db.exec("ALTER TABLE subscriptions ADD COLUMN category TEXT NOT NULL DEFAULT 'other' CHECK(category IN ('ai','network','other'));" +
-          'ALTER TABLE subscriptions ADD COLUMN auto_renew INTEGER CHECK(auto_renew IN (0,1));' +
-          "UPDATE subscriptions SET category='ai';");
+        if (version.value === '2') {
+          this.db.exec("ALTER TABLE subscriptions ADD COLUMN category TEXT NOT NULL DEFAULT 'other' CHECK(category IN ('ai','network','other'));" +
+            'ALTER TABLE subscriptions ADD COLUMN auto_renew INTEGER CHECK(auto_renew IN (0,1));' +
+            "UPDATE subscriptions SET category='ai';");
+        }
+        this.db.exec("ALTER TABLE api_quotas ADD COLUMN category TEXT NOT NULL DEFAULT 'other' CHECK(category IN ('ai','network','other'));" +
+          "UPDATE api_quotas SET category='ai';");
       }
-      this.db.prepare("UPDATE settings SET value='3' WHERE key='schema_version'").run();
+      this.db.prepare("UPDATE settings SET value=? WHERE key='schema_version'").run(String(SCHEMA_VERSION));
     });
   }
   openDatabase() {
@@ -306,6 +314,7 @@ export class Store {
   insertQuota(input) {
     const kind = stringValue(input.kind ?? '官方', '类型', 20).trim();
     if (!['官方', '中转'].includes(kind)) throw new AppError('额度类型应为「官方」或「中转」。');
+    const category = serviceCategory(input.category === undefined ? 'other' : input.category, '额度');
     const platform = stringValue(input.platform ?? '', '平台', 200).trim();
     if (!platform) throw new AppError('平台名称不能为空。');
     const entryUrl = stringValue(input.entryUrl ?? '', '入口', 2000).trim();
@@ -314,8 +323,8 @@ export class Store {
     const note = stringValue(input.note ?? '', '备注', 5000);
     const id = crypto.randomUUID();
     const timestamp = now();
-    this.db.prepare('INSERT INTO api_quotas(id,kind,platform,entry_url,balance,recorded_at,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)')
-      .run(id, kind, platform, entryUrl, balance, recordedAt, note, timestamp, timestamp);
+    this.db.prepare('INSERT INTO api_quotas(id,kind,category,platform,entry_url,balance,recorded_at,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)')
+      .run(id, kind, category, platform, entryUrl, balance, recordedAt, note, timestamp, timestamp);
     return this.quota(id);
   }
   updateQuota(id, input) {
@@ -323,20 +332,21 @@ export class Store {
     this.checkVersion(current, input.version);
     const kind = stringValue(input.kind ?? current.kind, '类型', 20).trim();
     if (!['官方', '中转'].includes(kind)) throw new AppError('额度类型应为「官方」或「中转」。');
+    const category = serviceCategory(input.category === undefined ? current.category : input.category, '额度');
     const platform = stringValue(input.platform ?? current.platform, '平台', 200).trim();
     if (!platform) throw new AppError('平台名称不能为空。');
     const entryUrl = stringValue(input.entryUrl ?? current.entryUrl, '入口', 2000).trim();
     const balance = stringValue(input.balance ?? current.balance, '余额', 200).trim();
     const recordedAt = optionalIsoDate(input.recordedAt ?? current.recordedAt, '记录日期');
     const note = stringValue(input.note ?? current.note, '备注', 5000);
-    this.db.prepare('UPDATE api_quotas SET kind=?,platform=?,entry_url=?,balance=?,recorded_at=?,note=?,updated_at=?,version=version+1 WHERE id=?')
-      .run(kind, platform, entryUrl, balance, recordedAt, note, now(), id);
+    this.db.prepare('UPDATE api_quotas SET kind=?,category=?,platform=?,entry_url=?,balance=?,recorded_at=?,note=?,updated_at=?,version=version+1 WHERE id=?')
+      .run(kind, category, platform, entryUrl, balance, recordedAt, note, now(), id);
     return this.quota(id);
   }
   insertSubscription(input) {
     const service = stringValue(input.service ?? '', '服务', 200).trim();
     if (!service) throw new AppError('服务名称不能为空。');
-    const category = subscriptionCategory(input.category === undefined ? 'other' : input.category);
+    const category = serviceCategory(input.category === undefined ? 'other' : input.category, '订阅');
     const autoRenew = autoRenewValue(input.autoRenew === undefined ? null : input.autoRenew);
     const account = stringValue(input.account ?? '', '账号', 300).trim();
     const plan = stringValue(input.plan ?? '', '套餐', 300).trim();
@@ -355,7 +365,7 @@ export class Store {
   updateSubscription(id, input) {
     const current = this.subscription(id);
     this.checkVersion(current, input.version);
-    const category = subscriptionCategory(input.category === undefined ? current.category : input.category);
+    const category = serviceCategory(input.category === undefined ? current.category : input.category, '订阅');
     const autoRenew = autoRenewValue(input.autoRenew === undefined ? current.autoRenew : input.autoRenew);
     const service = stringValue(input.service ?? current.service, '服务', 200).trim();
     if (!service) throw new AppError('服务名称不能为空。');
@@ -434,7 +444,7 @@ export class Store {
       await backup(this.db, scratch);
       const entries = { 'data.sqlite': new Uint8Array(fs.readFileSync(scratch)) };
       for (const file of walkFiles(this.attachmentDir)) entries['attachments/' + file.relative] = new Uint8Array(fs.readFileSync(file.absolute));
-      const manifest = { format: 'folio-backup', schemaVersion: 3, createdAt: now(), label, files: Object.fromEntries(Object.entries(entries).map(([name, bytes]) => [name, hash(bytes)])) };
+      const manifest = { format: 'folio-backup', schemaVersion: SCHEMA_VERSION, createdAt: now(), label, files: Object.fromEntries(Object.entries(entries).map(([name, bytes]) => [name, hash(bytes)])) };
       entries['manifest.json'] = strToU8(JSON.stringify(manifest, null, 2));
       const filename = id + '.zip';
       const destination = path.join(this.backupDir, filename);
@@ -465,7 +475,7 @@ export class Store {
     let entries, manifest;
     try { entries = unzipSync(bytes); manifest = JSON.parse(strFromU8(entries['manifest.json'])); }
     catch { throw new AppError('文件不是有效的完整备份。'); }
-    const okFormat = (manifest.format === 'folio-backup' && [2, 3].includes(manifest.schemaVersion))
+    const okFormat = (manifest.format === 'folio-backup' && [2, 3, 4].includes(manifest.schemaVersion))
       || (manifest.format === 'daily-affairs-backup' && manifest.schemaVersion === 1);
     if (!okFormat || !manifest.files || !entries['data.sqlite']) throw new AppError('备份版本或结构不受支持。');
     for (const [name, checksum] of Object.entries(manifest.files)) {
@@ -485,14 +495,15 @@ export class Store {
       validationDb = new DatabaseSync(candidatePath, { readOnly: true });
       if (validationDb.prepare('PRAGMA integrity_check').get().integrity_check !== 'ok') throw new AppError('备份数据库校验失败。');
       const schema = validationDb.prepare("SELECT value FROM settings WHERE key='schema_version'").get()?.value;
-      if (!['1', '2', '3'].includes(schema) || Number(schema) !== manifest.schemaVersion) throw new AppError('备份数据库校验失败。');
+      if (!['1', '2', '3', '4'].includes(schema) || Number(schema) !== manifest.schemaVersion) throw new AppError('备份数据库校验失败。');
       validationDb.prepare('SELECT ' + taskColumns + ' FROM tasks').all();
       validationDb.prepare('SELECT ' + noteColumns + ' FROM notes').all();
       validationDb.prepare('SELECT * FROM attachment_links').all();
       if (schema !== '1') {
-        validationDb.prepare('SELECT ' + quotaColumns + ' FROM api_quotas').all();
-        const subscriptions = validationDb.prepare('SELECT ' + (schema === '3' ? subColumns : legacySubColumns) + ' FROM subscriptions').all();
-        if (schema === '3' && subscriptions.some(row => !isSubscriptionCategory(row.category) || ![null, 0, 1].includes(row.autoRenew))) {
+        const quotas = validationDb.prepare('SELECT ' + (schema === '4' ? quotaColumns : legacyQuotaColumns) + ' FROM api_quotas').all();
+        if (schema === '4' && quotas.some(row => !isServiceCategory(row.category))) throw new AppError('备份额度字段校验失败。');
+        const subscriptions = validationDb.prepare('SELECT ' + (schema === '2' ? legacySubColumns : subColumns) + ' FROM subscriptions').all();
+        if (schema !== '2' && subscriptions.some(row => !isServiceCategory(row.category) || ![null, 0, 1].includes(row.autoRenew))) {
           throw new AppError('备份订阅字段校验失败。');
         }
       }
@@ -552,15 +563,15 @@ export class Store {
     const pending = state.tasks.filter(task => !task.deletedAt && task.status === 'pending').map(taskBlock).join('\n\n');
     const completed = state.tasks.filter(task => !task.deletedAt && task.status === 'completed').map(taskBlock).join('\n\n');
     const notes = state.notes.filter(note => !note.deletedAt).map(note => '### ' + note.title + '\n\n' + note.bodyMarkdown + linkedSection('note', note.id)).join('\n\n');
-    const quotas = state.quotas.filter(item => !item.deletedAt).map(item => `| ${item.kind} | ${item.platform} | ${item.entryUrl || '—'} | ${item.balance || '—'} | ${item.recordedAt || '—'} | ${item.note || '—'} |`).join('\n');
-    const subscriptions = state.subscriptions.filter(item => !item.deletedAt).map(item => `| ${subscriptionCategories[item.category]} | ${item.service} | ${item.account || '—'} | ${item.plan || '—'} | ${item.benefits || '—'} | ${item.status || '—'} | ${item.cost || '—'} | ${item.expiresAt || '—'} | ${autoRenewLabel(item.autoRenew)} | ${item.note || '—'} |`).join('\n');
+    const quotas = state.quotas.filter(item => !item.deletedAt).map(item => `| ${serviceCategories[item.category]} | ${item.kind} | ${item.platform} | ${item.entryUrl || '—'} | ${item.balance || '—'} | ${item.recordedAt || '—'} | ${item.note || '—'} |`).join('\n');
+    const subscriptions = state.subscriptions.filter(item => !item.deletedAt).map(item => `| ${serviceCategories[item.category]} | ${item.service} | ${item.account || '—'} | ${item.plan || '—'} | ${item.benefits || '—'} | ${item.status || '—'} | ${item.cost || '—'} | ${item.expiresAt || '—'} | ${autoRenewLabel(item.autoRenew)} | ${item.note || '—'} |`).join('\n');
     const id = stamp();
     const directory = path.join(this.exportDir, id);
     fs.mkdirSync(directory, { recursive: true });
     const entries = {
       '待办.md': strToU8(('# 待办\n\n## 待处理\n\n' + pending + '\n\n## 已完成\n\n' + completed + '\n').replace(/\r?\n/g, '\r\n')),
       '随手记.md': strToU8(('# 随手记\n\n## 随手记录\n\n' + notes + '\n').replace(/\r?\n/g, '\r\n')),
-      '服务与订阅.md': strToU8(('# 服务与订阅记录\n\n## API 额度\n\n| 类型 | 平台 | 入口 | 余额 | 记录 | 备注 |\n|---|---|---|---|---|---|\n' + (quotas || '| — | — | — | — | — | — |') + '\n\n## 订阅\n\n| 分类 | 服务 | 账号 | 套餐 | 权益 | 状态 | 费用 | 到期 | 续费 | 备注 |\n|---|---|---|---|---|---|---|---|---|---|\n' + (subscriptions || '| — | — | — | — | — | — | — | — | — | — |') + '\n').replace(/\r?\n/g, '\r\n')),
+      '服务与订阅.md': strToU8(('# 服务与订阅记录\n\n## 额度\n\n| 分类 | 类型 | 平台 | 入口 | 余额 | 记录 | 备注 |\n|---|---|---|---|---|---|---|\n' + (quotas || '| — | — | — | — | — | — | — |') + '\n\n## 订阅\n\n| 分类 | 服务 | 账号 | 套餐 | 权益 | 状态 | 费用 | 到期 | 续费 | 备注 |\n|---|---|---|---|---|---|---|---|---|---|\n' + (subscriptions || '| — | — | — | — | — | — | — | — | — | — |') + '\n').replace(/\r?\n/g, '\r\n')),
     };
     for (const file of files) entries['附件/' + file.storagePath] = new Uint8Array(fs.readFileSync(inside(this.attachmentDir, file.storagePath)));
     for (const [relative, bytes] of Object.entries(entries)) {

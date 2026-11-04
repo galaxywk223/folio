@@ -1,9 +1,21 @@
 {
   "name": "folio",
-  "version": "1.0.4",
-    "private": false,
-  "description": "Folio — local desk for tasks and subscriptions",
-  "author": "Wang Kai",
+  "version": "1.1.0",
+  "private": false,
+  "description": "Folio — local desk for tasks, quotas and subscriptions",
+  "keywords": [
+    "electron",
+    "desktop",
+    "windows",
+    "todo",
+    "subscriptions",
+    "quota",
+    "sqlite"
+  ],
+  "author": {
+    "name": "Wang Kai",
+    "url": "https://github.com/galaxywk223"
+  },
   "license": "MIT",
   "main": "out/main/index.js",
   "type": "module",

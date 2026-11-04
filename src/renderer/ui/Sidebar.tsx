@@ -10,7 +10,7 @@ const groups = [
     { id: 'completed' as const, title: '已完成', icon: CheckCircle2 },
   ] },
   { caption: '服务', label: '服务导航', items: [
-    { id: 'quotas' as const, title: 'API 额度', icon: Wallet },
+    { id: 'quotas' as const, title: '额度', icon: Wallet },
     { id: 'subscriptions' as const, title: '订阅', icon: CreditCard },
   ] },
 ];
