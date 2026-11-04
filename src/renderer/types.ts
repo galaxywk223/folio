@@ -15,12 +15,12 @@ export type ApiQuota = {
 };
 export type Subscription = {
   id: string; service: string; account: string; plan: string; benefits: string; status: string; cost: string;
-  category: SubscriptionCategory; autoRenew: boolean | null;
+  category: string; autoRenew: boolean | null;
   expiresAt: string; entryUrl: string; note: string; createdAt: string; updatedAt: string; deletedAt: string | null; version: number;
 };
 export type State = {
   tasks: Task[]; notes: Note[]; attachments: Attachment[]; links: Link[];
-  quotas: ApiQuota[]; subscriptions: Subscription[];
+  quotas: ApiQuota[]; subscriptions: Subscription[]; subscriptionCategories: SubscriptionCategory[];
   migration: { tasks: number; steps: number; notes: number; attachments: number; sourceHashes: Record<string, string> } | null;
 };
 export type Selection = { kind: Kind; id: string };
@@ -28,7 +28,7 @@ export type EditorValue = { title: string; dateText?: string; bodyMarkdown: stri
 export type QuotaDraft = { kind: '官方' | '中转'; category: ServiceCategory; platform: string; account: string; entryUrl: string; balance: string; recordedAt: string; note: string; version?: number };
 export type SubscriptionDraft = {
   service: string; account: string; plan: string; benefits: string; status: string; cost: string;
-  category: SubscriptionCategory; autoRenew: boolean | null;
+  category: string; autoRenew: boolean | null;
   expiresAt: string; entryUrl: string; note: string; version?: number;
 };
 export type Backup = { id: string; filename: string; createdAt: string; size: number };

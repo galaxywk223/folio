@@ -2,7 +2,6 @@ import type { RefObject, UIEvent } from 'react';
 import { Archive, CalendarDays, CheckCircle2, Circle, CreditCard, KeyRound, ListChecks, Loader2, Trash2, Wallet } from 'lucide-react';
 import { getSteps } from '../../shared/markdown';
 import { serviceCategories } from '../../shared/subscriptions';
-import type { ServiceFilter } from '../../shared/subscriptions';
 import { dateTime } from '../api';
 import { Empty } from '../components';
 import { expiryClass, expiryLabel, expiryUrgent } from '../format';
@@ -20,18 +19,19 @@ const emptyIcons: Record<View, React.ReactNode> = {
   subscriptions: <CreditCard size={26} />, trash: <Trash2 size={26} />,
 };
 
-export function ItemList({ listRef, loaded, error, items, view, searching, selection, busy, filtersLocked, filter, header, onFilter, onChoose, onNew, onClearSearch, onReload, onScroll }: {
+export function ItemList({ listRef, loaded, error, items, view, searching, selection, busy, filtersLocked, filter, subscriptionCategories, onManageCategories, header, onFilter, onChoose, onNew, onClearSearch, onReload, onScroll }: {
   listRef: RefObject<HTMLElement | null>; loaded: boolean; error: string; items: Item[]; view: View; searching: boolean;
-  selection: Selection | null; busy: boolean; filtersLocked: boolean; filter: ServiceFilter; header?: React.ReactNode;
-  onFilter: (filter: ServiceFilter) => void; onChoose: (item: Item) => void; onNew?: () => void;
+  selection: Selection | null; busy: boolean; filtersLocked: boolean; filter: string; subscriptionCategories: ReadonlyMap<string, string>; onManageCategories?: () => void; header?: React.ReactNode;
+  onFilter: (filter: string) => void; onChoose: (item: Item) => void; onNew?: () => void;
   onClearSearch: () => void; onReload: () => void; onScroll: (event: UIEvent<HTMLElement>) => void;
 }) {
+  const categories = view === 'subscriptions' ? [...subscriptionCategories] : Object.entries(serviceCategories);
   const inTrash = view === 'trash' && !searching;
   return <section ref={listRef} className="list-pane card" aria-label="内容列表" onScroll={onScroll}>
     {header}
     {(view === 'subscriptions' || view === 'quotas') && !searching && <div className="list-filters"><div className="segmented" role="group" aria-label={view === 'quotas' ? '额度分类' : '订阅分类'}>
-      {(['all', ...Object.keys(serviceCategories)] as ServiceFilter[]).map(category => <button key={category} className={filter === category ? 'active' : ''} aria-pressed={filter === category} disabled={filtersLocked || busy} onClick={() => onFilter(category)}>{category === 'all' ? '全部' : serviceCategories[category]}</button>)}
-    </div></div>}
+      {[['all', '全部'], ...categories].map(([id, name]) => <button key={id} className={filter === id ? 'active' : ''} aria-pressed={filter === id} disabled={filtersLocked || busy} onClick={() => onFilter(id)}>{name}</button>)}
+    </div>{onManageCategories && <button className="button secondary" disabled={filtersLocked || busy} onClick={onManageCategories}>管理分类</button>}</div>}
     <div className="list-heading"><span>{items.length} 项内容</span>{busy && <span><Loader2 className="spinning" size={13} />正在保存</span>}</div>
     {!loaded ? <Empty title={error ? '暂时无法读取数据' : '正在读取本地记录'} text={error ? '本地服务恢复后可重新读取，编辑内容不会清空。' : '正在连接本机服务。'} action={error ? onReload : undefined} actionLabel="重新读取" icon={<Loader2 size={25} className={error ? '' : 'spinning'} />} />
       : !items.length ? <Empty
@@ -53,7 +53,7 @@ export function ItemList({ listRef, loaded, error, items, view, searching, selec
                 : item.kind === 'quota' ? <Wallet size={17} /> : <CreditCard size={17} />}
             </span>
             <span className="row-content"><strong>{item.title}</strong><span className="row-metadata">
-              {inTrash ? <span>删除于 {dateTime(item.entity.deletedAt)}</span> : <RowMeta item={item} searching={searching} />}
+              {inTrash ? <span>删除于 {dateTime(item.entity.deletedAt)}</span> : <RowMeta item={item} searching={searching} subscriptionCategories={subscriptionCategories} />}
             </span></span>
             {item.kind === 'quota' && !inTrash && <span className="row-value">{(item.entity as ApiQuota).balance || '—'}</span>}
           </button>
@@ -62,7 +62,7 @@ export function ItemList({ listRef, loaded, error, items, view, searching, selec
   </section>;
 }
 
-function RowMeta({ item, searching }: { item: Item; searching: boolean }) {
+function RowMeta({ item, searching, subscriptionCategories }: { item: Item; searching: boolean; subscriptionCategories: ReadonlyMap<string, string> }) {
   if (item.kind === 'task') {
     const task = item.entity as Task;
     const steps = getSteps(task.bodyMarkdown);
@@ -82,7 +82,7 @@ function RowMeta({ item, searching }: { item: Item; searching: boolean }) {
   }
   const sub = item.entity as Subscription;
   return <>
-    <span className="badge">{serviceCategories[sub.category]}</span>
+    <span className="badge">{subscriptionCategories.get(sub.category)}</span>
     <span>{sub.plan || '未填套餐'}</span>
     {sub.expiresAt && <span className={'badge ' + expiryClass(sub.expiresAt)}><CalendarDays size={12} />{sub.expiresAt}{expiryLabel(sub.expiresAt)}</span>}
   </>;

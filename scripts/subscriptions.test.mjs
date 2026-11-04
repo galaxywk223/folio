@@ -40,13 +40,14 @@ function legacyFixture(version) {
   const directory = store.root;
   const dbPath = store.dbPath;
   close(store);
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath, { enableForeignKeyConstraints: false });
   try {
+    db.exec('DROP TABLE subscription_categories;');
     if (version === 1) db.exec('DROP TABLE subscriptions; DROP TABLE api_quotas;');
     else {
       if (version === 2) db.exec('ALTER TABLE subscriptions DROP COLUMN category; ALTER TABLE subscriptions DROP COLUMN auto_renew;');
       if (version < 4) db.exec('ALTER TABLE api_quotas DROP COLUMN category;');
-      db.exec('ALTER TABLE api_quotas DROP COLUMN account;');
+      if (version < 5) db.exec('ALTER TABLE api_quotas DROP COLUMN account;');
     }
     db.prepare("UPDATE settings SET value=? WHERE key='schema_version'").run(String(version));
     return { directory, dbPath, task, quota, active, deleted, subscriptions: version === 1 ? [] : rawRows(db, 'subscriptions'), tasks: rawRows(db, 'tasks'), quotas: version === 1 ? [] : rawRows(db, 'api_quotas') };
@@ -70,7 +71,7 @@ after(() => {
 test('new databases stay empty across startup and new subscriptions default to other/unrecorded', () => {
   let store = open();
   const directory = store.root;
-  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '5');
+  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '6');
   assert.deepEqual(store.state().subscriptions, []);
   assert.deepEqual(store.state().quotas, []);
   close(store);
@@ -108,7 +109,7 @@ test('version 2 migration preserves existing rows including recycle-bin metadata
 test('version 3 migration adds quota categories as AI and keeps subscriptions unchanged', () => {
   const fixture = legacyFixture(3);
   let store = open(fixture.directory);
-  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '5');
+  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '6');
   assert.deepEqual(rawRows(store.db, 'subscriptions'), fixture.subscriptions);
   const quotas = rawRows(store.db, 'api_quotas');
   assert.deepEqual(quotas.map(({ category, account, ...row }) => row), fixture.quotas);
@@ -153,9 +154,9 @@ function v4QuotaFixture(notes) {
   store.deleteEntity('quota', trashed.id, { version: trashed.version });
   const { root: directory, dbPath } = store;
   close(store);
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath, { enableForeignKeyConstraints: false });
   try {
-    db.exec('ALTER TABLE api_quotas DROP COLUMN account;');
+    db.exec('DROP TABLE subscription_categories; ALTER TABLE api_quotas DROP COLUMN account;');
     db.prepare("UPDATE settings SET value='4' WHERE key='schema_version'").run();
     return { directory, dbPath, quotas, rows: rawRows(db, 'api_quotas') };
   } finally { db.close(); }
@@ -195,7 +196,7 @@ function assertAccountMigration(rows, originals) {
 test('version 4 migration moves exactly one standalone account line out of quota notes', () => {
   const fixture = v4QuotaFixture(accountNotes);
   const store = open(fixture.directory);
-  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '5');
+  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '6');
   assertAccountMigration(rawRows(store.db, 'api_quotas'), fixture.rows);
   assert.ok(store.quota(fixture.quotas.at(-1).id, true).deletedAt, 'trashed quota stays in recycle bin');
   close(store);
@@ -241,7 +242,7 @@ test('version 4 backups migrate quota accounts on restore with the same rules', 
   const fixture = v4QuotaFixture(accountNotes);
   const target = open();
   await target.restoreBackup(backupBytes(fixture.dbPath, 4));
-  assert.equal(target.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '5');
+  assert.equal(target.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '6');
   assertAccountMigration(rawRows(target.db, 'api_quotas'), fixture.rows);
   close(target);
 });
@@ -253,6 +254,7 @@ test('malformed version 5 quota tables without account are rejected', async () =
   const malformed = open();
   const malformedPath = malformed.dbPath;
   malformed.db.exec('ALTER TABLE api_quotas DROP COLUMN account');
+  malformed.db.prepare("UPDATE settings SET value='5' WHERE key='schema_version'").run();
   close(malformed);
   await assert.rejects(target.restoreBackup(backupBytes(malformedPath, 5)), /备份恢复失败/);
   assert.deepEqual(target.state(), snapshot);
@@ -265,7 +267,7 @@ test('version 1 migration preserves tasks and creates empty service tables', () 
   assert.deepEqual(rawRows(store.db, 'tasks'), fixture.tasks);
   assert.deepEqual(store.state().subscriptions, []);
   assert.deepEqual(store.state().quotas, []);
-  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '5');
+  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '6');
   close(store);
 });
 
@@ -332,7 +334,7 @@ test('all/AI/network/other filters exclude trash and preserve expiry order', () 
   close(store);
 });
 
-test('version 5 backups retain new fields, tasks and attachments; corrupt backups leave data unchanged', async () => {
+test('version 6 backups retain service fields, tasks and attachments; corrupt backups leave data unchanged', async () => {
   const source = open();
   source.insertSubscription({ service: 'Network', category: 'network', autoRenew: false });
   source.insertSubscription({ service: 'AI', category: 'ai', autoRenew: true });
@@ -343,7 +345,7 @@ test('version 5 backups retain new fields, tasks and attachments; corrupt backup
   const backup = await source.createBackup();
   const bytes = new Uint8Array(fs.readFileSync(source.backupPath(backup.id)));
   const entries = unzipSync(bytes);
-  assert.equal(JSON.parse(strFromU8(entries['manifest.json'])).schemaVersion, 5);
+  assert.equal(JSON.parse(strFromU8(entries['manifest.json'])).schemaVersion, 6);
   const target = open();
   await target.restoreBackup(bytes);
   assert.deepEqual(target.state(), source.state());
@@ -356,12 +358,12 @@ test('version 5 backups retain new fields, tasks and attachments; corrupt backup
   close(target);
 });
 
-test('legacy version 1–4 backups restore and migrate without changing original fields', async () => {
+test('legacy version 1–5 backups restore and migrate without changing original fields', async () => {
   const target = open();
-  for (const version of [4, 3, 2, 1]) {
+  for (const version of [5, 4, 3, 2, 1]) {
     const fixture = legacyFixture(version);
     await target.restoreBackup(backupBytes(fixture.dbPath, version));
-    assert.equal(target.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '5');
+    assert.equal(target.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '6');
     assert.deepEqual(rawRows(target.db, 'tasks'), fixture.tasks);
     if (version >= 3) {
       assert.deepEqual(rawRows(target.db, 'subscriptions'), fixture.subscriptions);
@@ -424,4 +426,38 @@ test('Markdown export includes categories and all renewal states while excluding
   assert.ok(!markdown.includes('Hidden trash'));
   assert.ok(!markdown.includes('AI 订阅'));
   close(store);
+});
+
+test('subscription categories persist across rename, deletion and backup restoration', async () => {
+  const store = open();
+  assert.deepEqual(store.state().subscriptionCategories.map(row => row.name), ['AI', '开发与云', '网络', '办公', '社交', '其他']);
+  const category = store.saveSubscriptionCategory({ name: '  Projects  ' });
+  assert.equal(category.name, 'Projects');
+  assert.throws(() => store.saveSubscriptionCategory({ name: 'pROJECTS' }), /已存在/);
+  assert.throws(() => store.saveSubscriptionCategory({ name: '  ' }), /不能为空/);
+  assert.throws(() => store.saveSubscriptionCategory({ name: 'Default' }, 'other', false), /不能重命名/);
+  assert.throws(() => store.deleteSubscriptionCategory('other', { count: 0 }), /不能删除/);
+  const active = store.insertSubscription({ service: 'Active', category: category.id, account: 'test@example.test' });
+  const trashed = store.insertSubscription({ service: 'Trashed', category: category.id });
+  store.deleteEntity('subscription', trashed.id, { version: trashed.version });
+  assert.throws(() => store.insertQuota({ platform: 'Invalid quota', category: category.id }), /额度分类/);
+  assert.ok(matchesSubscriptionFilter(active, category.id));
+  store.saveSubscriptionCategory({ name: 'Work | Tools' }, category.id, false);
+  assert.equal(store.subscription(active.id).category, category.id);
+  const exported = store.exportMarkdown();
+  const markdown = fs.readFileSync(path.join(store.root, exported.directory, '服务与订阅.md'), 'utf8');
+  assert.ok(markdown.includes('Work \\| Tools'));
+  const saved = await store.createBackup();
+  const target = open();
+  await target.restoreBackup(fs.readFileSync(store.backupPath(saved.id)));
+  assert.deepEqual(target.state().subscriptionCategories, store.state().subscriptionCategories);
+  assert.throws(() => target.deleteSubscriptionCategory(category.id, { count: 1 }), /数量已变化/);
+  target.deleteSubscriptionCategory(category.id, { count: 2 });
+  assert.equal(target.subscription(active.id).category, 'other');
+  assert.equal(target.subscription(active.id).account, active.account);
+  assert.equal(target.subscription(active.id).version, active.version + 1);
+  assert.ok(target.subscription(trashed.id, true).deletedAt);
+  target.restoreEntity('subscription', trashed.id);
+  assert.equal(target.subscription(trashed.id).category, 'other');
+  assert.ok(!target.state().subscriptionCategories.some(row => row.id === category.id));
 });

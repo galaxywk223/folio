@@ -1,4 +1,4 @@
-// 额度与订阅共用同一套分类。
+// 额度保留固定分类，订阅分类从数据库读取。
 export const serviceCategories = {
   ai: 'AI',
   network: '网络',
@@ -13,17 +13,16 @@ export function isServiceCategory(value: unknown): value is ServiceCategory {
 }
 
 export function matchesServiceFilter(
-  item: { category: ServiceCategory; deletedAt: string | null },
-  filter: ServiceFilter,
+  item: { category: string; deletedAt: string | null },
+  filter: string,
 ): boolean {
   return !item.deletedAt && (filter === 'all' || item.category === filter);
 }
 
-export const subscriptionCategories = serviceCategories;
-export type SubscriptionCategory = ServiceCategory;
-export type SubscriptionFilter = ServiceFilter;
-export const isSubscriptionCategory = isServiceCategory;
-export const matchesSubscriptionFilter = matchesServiceFilter;
+export type SubscriptionCategory = { id: string; name: string };
+export const matchesSubscriptionFilter: (
+  item: { category: string; deletedAt: string | null }, filter: string,
+) => boolean = matchesServiceFilter;
 
 export function autoRenewLabel(value: boolean | null): string {
   return value === null ? '未记录' : value ? '开启' : '关闭';

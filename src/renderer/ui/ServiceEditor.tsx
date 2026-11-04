@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { AlertCircle, Save, X } from 'lucide-react';
 import { serviceCategories } from '../../shared/subscriptions';
-import type { ServiceCategory } from '../../shared/subscriptions';
+import type { SubscriptionCategory } from '../../shared/subscriptions';
 import type { QuotaDraft, SubscriptionDraft } from '../types';
 
 const categoryOptions = Object.entries(serviceCategories).map(([value, label]) => <option key={value} value={value}>{label}</option>);
@@ -10,10 +10,11 @@ function Field({ id, label, wide, children }: { id: string; label: string; wide?
   return <div className={'field' + (wide ? ' wide' : '')}><label className="field-label" htmlFor={id}>{label}</label>{children}</div>;
 }
 
-export function ServiceEditor({ kind, initial, isNew, onSave, onCancel, onDirty }: {
+export function ServiceEditor({ kind, initial, isNew, categories, onSave, onCancel, onDirty }: {
   kind: 'quota' | 'subscription';
   initial: QuotaDraft | SubscriptionDraft;
   isNew: boolean;
+  categories?: SubscriptionCategory[];
   onSave: (value: QuotaDraft | SubscriptionDraft) => Promise<void> | void;
   onCancel: () => void;
   onDirty: (value: boolean) => void;
@@ -47,7 +48,7 @@ export function ServiceEditor({ kind, initial, isNew, onSave, onCancel, onDirty 
         </div>
         <Field id="q-platform" label="平台">{text('q-platform', 'platform', quota.platform, { autoFocus: true })}</Field>
         <Field id="q-category" label="分类">
-          <select id="q-category" className="input" value={quota.category} onChange={e => setField('category', e.target.value as ServiceCategory)} disabled={saving}>
+          <select id="q-category" className="input" value={quota.category} onChange={e => setField('category', e.target.value)} disabled={saving}>
             {categoryOptions}
           </select>
         </Field>
@@ -59,8 +60,8 @@ export function ServiceEditor({ kind, initial, isNew, onSave, onCancel, onDirty 
       </> : <>
         <Field id="s-service" label="服务" wide>{text('s-service', 'service', sub.service, { autoFocus: true })}</Field>
         <Field id="s-category" label="分类">
-          <select id="s-category" className="input" value={sub.category} onChange={e => setField('category', e.target.value as ServiceCategory)} disabled={saving}>
-            {categoryOptions}
+          <select id="s-category" className="input" value={sub.category} onChange={e => setField('category', e.target.value)} disabled={saving}>
+            {categories?.map(({ id, name }) => <option key={id} value={id}>{name}</option>)}
           </select>
         </Field>
         <Field id="s-account" label="账号">{text('s-account', 'account', sub.account)}</Field>

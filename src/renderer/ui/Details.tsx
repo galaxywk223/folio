@@ -1,7 +1,7 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { ArchiveRestore, ArrowLeft, CalendarDays, Check, CheckCircle2, ExternalLink, MoreHorizontal, PencilLine, Trash2 } from 'lucide-react';
 import { getSteps } from '../../shared/markdown';
-import { autoRenewLabel, subscriptionCategories } from '../../shared/subscriptions';
+import { autoRenewLabel, serviceCategories } from '../../shared/subscriptions';
 import { dateTime, openExternal } from '../api';
 import { Markdown } from '../components';
 import { expiryClass, expiryLabel } from '../format';
@@ -60,7 +60,7 @@ export function QuotaDetail({ quota, onClose, onEdit, onDelete }: { quota: ApiQu
     <DetailToolbar caption="额度" onClose={onClose} onEdit={onEdit} onDelete={onDelete} />
     <div className="detail-scroll">
       <h2 className="detail-title">{quota.platform}</h2>
-      <div className="detail-meta"><span className="badge accent">{subscriptionCategories[quota.category]}</span><span className="badge">{quota.kind}</span>{quota.account && <span className="badge">{quota.account}</span>}{quota.recordedAt && <span className="badge"><CalendarDays size={13} />记录于 {quota.recordedAt}</span>}</div>
+      <div className="detail-meta"><span className="badge accent">{serviceCategories[quota.category]}</span><span className="badge">{quota.kind}</span>{quota.account && <span className="badge">{quota.account}</span>}{quota.recordedAt && <span className="badge"><CalendarDays size={13} />记录于 {quota.recordedAt}</span>}</div>
       <div className="hero-value"><span>余额</span><strong>{quota.balance || '—'}</strong></div>
       <PropertyList rows={[['备注', quota.note]]} />
       <EntryButton url={quota.entryUrl} />
@@ -68,13 +68,13 @@ export function QuotaDetail({ quota, onClose, onEdit, onDelete }: { quota: ApiQu
   </div>;
 }
 
-export function SubscriptionDetail({ sub, onClose, onEdit, onDelete }: { sub: Subscription; onClose: () => void; onEdit: () => void; onDelete: () => void }) {
+export function SubscriptionDetail({ sub, categoryName, onClose, onEdit, onDelete }: { sub: Subscription; categoryName: string; onClose: () => void; onEdit: () => void; onDelete: () => void }) {
   return <div className="detail-layout">
     <DetailToolbar caption="订阅" onClose={onClose} onEdit={onEdit} onDelete={onDelete} />
     <div className="detail-scroll">
       <h2 className="detail-title">{sub.service}</h2>
       <div className="detail-meta">
-        <span className="badge accent">{subscriptionCategories[sub.category]}</span>
+        <span className="badge accent">{categoryName}</span>
         {sub.account && <span className="badge">{sub.account}</span>}
         {sub.expiresAt && <span className={'badge ' + expiryClass(sub.expiresAt)}><CalendarDays size={13} />到期 {sub.expiresAt}{expiryLabel(sub.expiresAt)}</span>}
       </div>

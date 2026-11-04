@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Check, FileText, X } from 'lucide-react';
 import { getSteps } from '../shared/markdown';
-import { serviceCategories, matchesServiceFilter } from '../shared/subscriptions';
+import { serviceCategories, isServiceCategory, matchesServiceFilter, matchesSubscriptionFilter } from '../shared/subscriptions';
 import type { ServiceFilter } from '../shared/subscriptions';
 import { request } from './api';
 import { Confirm, Editor, Empty } from './components';
 import type { Confirmation, EditorHandle } from './components';
 import { parseBalance } from './format';
 import type { ApiQuota, EditorValue, Item, Kind, QuotaDraft, Selection, State, Subscription, SubscriptionDraft, Task, View } from './types';
+import { CategoryManager } from './ui/CategoryManager';
 import { DataManager } from './ui/DataManager';
 import { QuotaDetail, SubscriptionDetail, TaskDetail, TrashDetail } from './ui/Details';
 import { ItemList } from './ui/ItemList';
@@ -37,7 +38,8 @@ const emptySubscription: SubscriptionDraft = { service: '', category: 'other', a
 export default function App() {
   const [state, setState] = useState<State | null>(null);
   const [view, setView] = useState<View>('pending');
-  const [subscriptionFilter, setSubscriptionFilter] = useState<ServiceFilter>('all');
+  const [selectedSubscriptionFilter, setSubscriptionFilter] = useState('all');
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [quotaFilter, setQuotaFilter] = useState<ServiceFilter>('all');
   const [query, setQuery] = useState('');
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -55,6 +57,11 @@ export default function App() {
   const searchRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<EditorHandle>(null);
   const scrollPositions = useRef<Record<string, number>>({});
+  const categoryNames = useMemo(() => new Map(state?.subscriptionCategories.map(({ id, name }) => [id, name])), [state]);
+  const subscriptionFilter = categoryNames.has(selectedSubscriptionFilter) ? selectedSubscriptionFilter : 'all';
+  useEffect(() => {
+    if (state && !categoryNames.has(selectedSubscriptionFilter)) setSubscriptionFilter('all');
+  }, [state, categoryNames, selectedSubscriptionFilter]);
   const effectiveView = query.trim() ? 'search' : view === 'subscriptions' ? 'subscriptions-' + subscriptionFilter : view === 'quotas' ? 'quotas-' + quotaFilter : view;
 
   const load = useCallback(async () => {
@@ -119,7 +126,7 @@ export default function App() {
           item.title, item.subtitle,
           'bodyMarkdown' in item.entity ? item.entity.bodyMarkdown : '',
           'platform' in item.entity ? item.entity.platform + item.entity.account + item.entity.balance + item.entity.note + serviceCategories[item.entity.category] : '',
-          'service' in item.entity ? item.entity.service + item.entity.account + item.entity.plan + item.entity.note + item.entity.status + serviceCategories[item.entity.category] : '',
+          'service' in item.entity ? item.entity.service + item.entity.account + item.entity.plan + item.entity.note + item.entity.status + (categoryNames.get(item.entity.category) ?? '') : '',
         ].join('\n').toLocaleLowerCase();
         return hay.includes(keyword);
       });
@@ -138,9 +145,9 @@ export default function App() {
           return bVal - aVal;
         });
     }
-    if (view === 'subscriptions') return all.filter(item => item.kind === 'subscription' && matchesServiceFilter(item.entity as Subscription, subscriptionFilter));
+    if (view === 'subscriptions') return all.filter(item => item.kind === 'subscription' && matchesSubscriptionFilter(item.entity as Subscription, subscriptionFilter));
     return [];
-  }, [state, view, query, subscriptionFilter, quotaFilter]);
+  }, [state, view, query, subscriptionFilter, quotaFilter, categoryNames]);
   useEffect(() => {
     if (editing) return;
     if (!selection || !items.some(item => item.id === selection.id && item.kind === selection.kind)) {
@@ -247,14 +254,14 @@ export default function App() {
     : view === 'subscriptions' ? { label: '新订阅', run: () => startSubEdit() } : null;
 
   const detail = editing?.kind === 'quota' ? <ServiceEditor kind="quota" initial={editing.initial} isNew={!editing.id} onSave={value => saveQuota(value as QuotaDraft)} onCancel={() => guarded(() => {})} onDirty={setDirty} />
-    : editing?.kind === 'subscription' ? <ServiceEditor kind="subscription" initial={editing.initial} isNew={!editing.id} onSave={value => saveSubscription(value as SubscriptionDraft)} onCancel={() => guarded(() => {})} onDirty={setDirty} />
+    : editing?.kind === 'subscription' ? <ServiceEditor kind="subscription" categories={state?.subscriptionCategories} initial={editing.initial} isNew={!editing.id} onSave={value => saveSubscription(value as SubscriptionDraft)} onCancel={() => guarded(() => {})} onDirty={setDirty} />
     : editing?.kind === 'task' ? <Editor key={'task' + (editing.id || '-new')} ref={editorRef} initial={editing.initial} kind="task" isNew={!editing.id} onSave={saveEditor} onDirty={setDirty} onCancel={() => guarded(() => {})} />
     : !selectedItem ? <Empty title="选择一项查看详情" text="说明、检查步骤与服务信息会显示在这里。" icon={<FileText size={26} />} />
     : view === 'trash' && !searching ? <TrashDetail item={selectedItem} busy={busy} onClose={closeDrawer} onRestore={() => void operate(() => request('/api/trash/' + selectedItem.kind + '/' + selectedItem.id + '/restore', 'POST'), '已从回收站恢复')} />
     : selectedTask ? <TaskDetail task={selectedTask} busy={busy} onClose={closeDrawer} onEdit={() => startEdit(selectedTask)} onDelete={() => removeItem('task', selectedTask)}
       onToggleStep={(index, checked) => void operate(() => request('/api/tasks/' + selectedTask.id + '/steps', 'POST', { index, checked, version: selectedTask.version }))} onComplete={() => completeTask(selectedTask)} />
     : selectedQuota ? <QuotaDetail quota={selectedQuota} onClose={closeDrawer} onEdit={() => startQuotaEdit(selectedQuota)} onDelete={() => removeItem('quota', selectedQuota)} />
-    : selectedSub ? <SubscriptionDetail sub={selectedSub} onClose={closeDrawer} onEdit={() => startSubEdit(selectedSub)} onDelete={() => removeItem('subscription', selectedSub)} />
+    : selectedSub ? <SubscriptionDetail sub={selectedSub} categoryName={categoryNames.get(selectedSub.category) ?? ''} onClose={closeDrawer} onEdit={() => startSubEdit(selectedSub)} onDelete={() => removeItem('subscription', selectedSub)} />
     : null;
 
   return <div className="app-shell">
@@ -274,7 +281,8 @@ export default function App() {
           listRef={listRef} loaded={!!state} error={error} items={items} view={view} searching={searching}
           selection={selection} busy={busy} filtersLocked={!!editing} filter={view === 'quotas' ? quotaFilter : subscriptionFilter}
           header={state && !searching ? view === 'subscriptions' ? <SubscriptionOverview items={state.subscriptions} /> : view === 'quotas' ? <QuotaOverview items={state.quotas} /> : undefined : undefined}
-          onFilter={category => guarded(() => { if (view === 'quotas') setQuotaFilter(category); else setSubscriptionFilter(category); setSelection(null); setDrawerOpen(false); })}
+          subscriptionCategories={categoryNames} onManageCategories={view === 'subscriptions' && state ? () => setCategoriesOpen(true) : undefined}
+          onFilter={category => guarded(() => { if (view === 'quotas') setQuotaFilter(isServiceCategory(category) ? category : 'all'); else setSubscriptionFilter(category); setSelection(null); setDrawerOpen(false); })}
           onChoose={choose} onNew={newAction?.run} onClearSearch={() => setQuery('')}
           onReload={() => void load().catch(failure => setError(failure.message))}
           onScroll={event => { scrollPositions.current[effectiveView] = event.currentTarget.scrollTop; }}
@@ -283,6 +291,7 @@ export default function App() {
         <aside ref={detailRef} className={'detail-pane card ' + (drawerOpen ? 'drawer-open' : '')} aria-label="内容详情" role={!wide && drawerOpen ? 'dialog' : undefined} aria-modal={!wide && drawerOpen ? true : undefined}>{detail}</aside>
       </div>
     </main>
+    {state && categoriesOpen && <CategoryManager state={state} onClose={() => setCategoriesOpen(false)} onRefresh={load} />}
     <Confirm value={confirmation} onClose={() => setConfirmation(null)} />
     <DataManager open={dataOpen} onOpenChange={setDataOpen} onNotice={setNotice} onError={setError} onRestore={async (action) => {
       setConfirmation({ title: '从完整备份恢复', message: '恢复将替换应用中的事项与服务条目。当前数据会先自动备份。', primary: '备份当前数据并恢复', action: () => operate(async () => { await action(); setDataOpen(false); setSelection(null); setQuery(''); setView('pending'); }, '备份已恢复，恢复前的数据另有自动备份。') });
