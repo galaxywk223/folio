@@ -31,7 +31,7 @@ type Editing =
   | { kind: 'quota'; id: string | null; initial: QuotaDraft }
   | { kind: 'subscription'; id: string | null; initial: SubscriptionDraft };
 
-const emptyQuota: QuotaDraft = { kind: '官方', category: 'other', platform: '', entryUrl: '', balance: '', recordedAt: '', note: '' };
+const emptyQuota: QuotaDraft = { kind: '官方', category: 'other', platform: '', account: '', entryUrl: '', balance: '', recordedAt: '', note: '' };
 const emptySubscription: SubscriptionDraft = { service: '', category: 'other', autoRenew: null, account: '', plan: '', benefits: '', status: '', cost: '', expiresAt: '', entryUrl: '', note: '' };
 
 export default function App() {
@@ -108,7 +108,7 @@ export default function App() {
     if (!state) return [];
     const all: Item[] = [
       ...state.tasks.map(task => ({ kind: 'task' as const, id: task.id, title: task.title, subtitle: task.dateText, entity: task })),
-      ...state.quotas.map(item => ({ kind: 'quota' as const, id: item.id, title: item.platform, subtitle: item.balance + ' · ' + item.kind, entity: item })),
+      ...state.quotas.map(item => ({ kind: 'quota' as const, id: item.id, title: item.platform + (item.account ? ' · ' + item.account : ''), subtitle: item.balance + ' · ' + item.kind, entity: item })),
       ...state.subscriptions.map(item => ({ kind: 'subscription' as const, id: item.id, title: item.service + (item.account ? ' · ' + item.account : ''), subtitle: [item.plan, item.expiresAt].filter(Boolean).join(' · '), entity: item })),
     ];
     if (query.trim()) {
@@ -118,7 +118,7 @@ export default function App() {
         const hay = [
           item.title, item.subtitle,
           'bodyMarkdown' in item.entity ? item.entity.bodyMarkdown : '',
-          'platform' in item.entity ? item.entity.platform + item.entity.balance + item.entity.note + serviceCategories[item.entity.category] : '',
+          'platform' in item.entity ? item.entity.platform + item.entity.account + item.entity.balance + item.entity.note + serviceCategories[item.entity.category] : '',
           'service' in item.entity ? item.entity.service + item.entity.account + item.entity.plan + item.entity.note + item.entity.status + serviceCategories[item.entity.category] : '',
         ].join('\n').toLocaleLowerCase();
         return hay.includes(keyword);
@@ -183,7 +183,7 @@ export default function App() {
     guarded(() => {
       setEditing({
         kind: 'quota', id: entity?.id || null,
-        initial: entity ? { kind: entity.kind, category: entity.category, platform: entity.platform, entryUrl: entity.entryUrl, balance: entity.balance, recordedAt: entity.recordedAt, note: entity.note, version: entity.version } : { ...emptyQuota },
+        initial: entity ? { kind: entity.kind, category: entity.category, platform: entity.platform, account: entity.account, entryUrl: entity.entryUrl, balance: entity.balance, recordedAt: entity.recordedAt, note: entity.note, version: entity.version } : { ...emptyQuota },
       });
       setDrawerOpen(true);
     });

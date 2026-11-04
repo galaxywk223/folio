@@ -51,6 +51,7 @@ export function ServiceEditor({ kind, initial, isNew, onSave, onCancel, onDirty 
             {categoryOptions}
           </select>
         </Field>
+        <Field id="q-account" label="账号" wide>{text('q-account', 'account', quota.account)}</Field>
         <Field id="q-balance" label="余额">{text('q-balance', 'balance', quota.balance)}</Field>
         <Field id="q-date" label="记录日期">{text('q-date', 'recordedAt', quota.recordedAt, { type: 'date' })}</Field>
         <Field id="q-url" label="入口 URL" wide>{text('q-url', 'entryUrl', quota.entryUrl, { placeholder: 'https://' })}</Field>

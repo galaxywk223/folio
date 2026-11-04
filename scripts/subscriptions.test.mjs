@@ -45,7 +45,8 @@ function legacyFixture(version) {
     if (version === 1) db.exec('DROP TABLE subscriptions; DROP TABLE api_quotas;');
     else {
       if (version === 2) db.exec('ALTER TABLE subscriptions DROP COLUMN category; ALTER TABLE subscriptions DROP COLUMN auto_renew;');
-      db.exec('ALTER TABLE api_quotas DROP COLUMN category;');
+      if (version < 4) db.exec('ALTER TABLE api_quotas DROP COLUMN category;');
+      db.exec('ALTER TABLE api_quotas DROP COLUMN account;');
     }
     db.prepare("UPDATE settings SET value=? WHERE key='schema_version'").run(String(version));
     return { directory, dbPath, task, quota, active, deleted, subscriptions: version === 1 ? [] : rawRows(db, 'subscriptions'), tasks: rawRows(db, 'tasks'), quotas: version === 1 ? [] : rawRows(db, 'api_quotas') };
@@ -69,7 +70,7 @@ after(() => {
 test('new databases stay empty across startup and new subscriptions default to other/unrecorded', () => {
   let store = open();
   const directory = store.root;
-  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '4');
+  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '5');
   assert.deepEqual(store.state().subscriptions, []);
   assert.deepEqual(store.state().quotas, []);
   close(store);
@@ -93,8 +94,8 @@ test('version 2 migration preserves existing rows including recycle-bin metadata
   assert.ok(migrated.every(row => row.category === 'ai' && row.auto_renew === null));
   assert.deepEqual(rawRows(store.db, 'tasks'), fixture.tasks);
   const quotas = rawRows(store.db, 'api_quotas');
-  assert.deepEqual(quotas.map(({ category, ...row }) => row), fixture.quotas);
-  assert.ok(quotas.every(row => row.category === 'ai'));
+  assert.deepEqual(quotas.map(({ category, account, ...row }) => row), fixture.quotas);
+  assert.ok(quotas.every(row => row.category === 'ai' && row.account === ''));
   assert.ok(store.subscription(fixture.deleted.id, true).deletedAt);
   const snapshot = store.state();
   close(store);
@@ -107,10 +108,10 @@ test('version 2 migration preserves existing rows including recycle-bin metadata
 test('version 3 migration adds quota categories as AI and keeps subscriptions unchanged', () => {
   const fixture = legacyFixture(3);
   let store = open(fixture.directory);
-  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '4');
+  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '5');
   assert.deepEqual(rawRows(store.db, 'subscriptions'), fixture.subscriptions);
   const quotas = rawRows(store.db, 'api_quotas');
-  assert.deepEqual(quotas.map(({ category, ...row }) => row), fixture.quotas);
+  assert.deepEqual(quotas.map(({ category, account, ...row }) => row), fixture.quotas);
   assert.equal(store.quota(fixture.quota.id).category, 'ai');
   close(store);
   store = open(fixture.directory);
@@ -143,13 +144,128 @@ test('quota categories default to other, validate input and filter like subscrip
   close(store);
 });
 
+const EMAIL_A = 'alice@example.test';
+const EMAIL_B = 'bob@example.test';
+function v4QuotaFixture(notes) {
+  const store = open();
+  const quotas = notes.map((note, index) => store.insertQuota({ platform: 'Quota ' + index, category: 'network', note }));
+  const trashed = quotas.at(-1);
+  store.deleteEntity('quota', trashed.id, { version: trashed.version });
+  const { root: directory, dbPath } = store;
+  close(store);
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec('ALTER TABLE api_quotas DROP COLUMN account;');
+    db.prepare("UPDATE settings SET value='4' WHERE key='schema_version'").run();
+    return { directory, dbPath, quotas, rows: rawRows(db, 'api_quotas') };
+  } finally { db.close(); }
+}
+const accountNotes = [
+  '账号：' + EMAIL_A,
+  '首行备注\n账号: ' + EMAIL_B + '\n末行备注',
+  '账号：' + EMAIL_A + '\n账号：' + EMAIL_B,
+  '账号：不是邮箱',
+  '账号：' + EMAIL_A + ' 主力',
+  '普通备注，没有账号',
+  '',
+  '账号：' + EMAIL_B,
+];
+function assertAccountMigration(rows, originals) {
+  const byId = new Map(rows.map(row => [row.id, row]));
+  const expected = [
+    [EMAIL_A, ''],
+    [EMAIL_B, '首行备注\n末行备注'],
+    ['', accountNotes[2]],
+    ['', accountNotes[3]],
+    ['', accountNotes[4]],
+    ['', accountNotes[5]],
+    ['', ''],
+    [EMAIL_B, ''],
+  ];
+  originals.forEach((original, index) => {
+    const row = byId.get(original.id);
+    assert.equal(row.account, expected[index][0], 'account ' + index);
+    assert.equal(row.note, expected[index][1], 'note ' + index);
+    const { account, note, ...rest } = row;
+    const { account: _a, note: _n, ...before } = original;
+    assert.deepEqual(rest, before, 'other columns ' + index);
+  });
+}
+
+test('version 4 migration moves exactly one standalone account line out of quota notes', () => {
+  const fixture = v4QuotaFixture(accountNotes);
+  const store = open(fixture.directory);
+  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '5');
+  assertAccountMigration(rawRows(store.db, 'api_quotas'), fixture.rows);
+  assert.ok(store.quota(fixture.quotas.at(-1).id, true).deletedAt, 'trashed quota stays in recycle bin');
+  close(store);
+});
+
+test('quota account can be created, edited, kept when omitted, cleared, and survives recycling over HTTP', async () => {
+  const running = await startServer(root(), 0, { legacyAffairsDir: path.join(scratch, 'absent-legacy-accounts') });
+  async function request(route, method = 'GET', body, expected = 200) {
+    const response = await fetch('http://127.0.0.1:' + running.port + route, {
+      method, headers: { 'Content-Type': 'application/json', 'X-Folio-App': '1' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    assert.equal(response.status, expected);
+    return response.status === 204 ? undefined : response.json();
+  }
+  try {
+    let record = await request('/api/quotas', 'POST', { platform: 'Account quota', account: '  ' + EMAIL_A + '  ' }, 201);
+    assert.equal(record.account, EMAIL_A);
+    assert.equal((await request('/api/quotas', 'POST', { platform: 'No account' }, 201)).account, '');
+    const route = '/api/quotas/' + record.id;
+    record = await request(route, 'PATCH', { account: EMAIL_B, version: record.version });
+    assert.equal(record.account, EMAIL_B);
+    record = await request(route, 'PATCH', { balance: '10', version: record.version });
+    assert.equal(record.account, EMAIL_B);
+    await request(route, 'PATCH', { account: 42, version: record.version }, 400);
+    record = await request(route, 'PATCH', { account: EMAIL_A, version: record.version });
+    await request(route, 'DELETE', { version: record.version }, 204);
+    assert.equal((await request('/api/state')).quotas.find(row => row.id === record.id).account, EMAIL_A);
+    await request('/api/trash/quota/' + record.id + '/restore', 'POST', {}, 204);
+    record = (await request('/api/state')).quotas.find(row => row.id === record.id);
+    assert.equal(record.deletedAt, null);
+    assert.equal(record.account, EMAIL_A);
+    record = await request(route, 'PATCH', { account: '', version: record.version });
+    assert.equal(record.account, '');
+  } finally {
+    const closed = new Promise(resolve => running.server.once('close', resolve));
+    running.close();
+    await closed;
+  }
+});
+
+test('version 4 backups migrate quota accounts on restore with the same rules', async () => {
+  const fixture = v4QuotaFixture(accountNotes);
+  const target = open();
+  await target.restoreBackup(backupBytes(fixture.dbPath, 4));
+  assert.equal(target.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '5');
+  assertAccountMigration(rawRows(target.db, 'api_quotas'), fixture.rows);
+  close(target);
+});
+
+test('malformed version 5 quota tables without account are rejected', async () => {
+  const target = open();
+  target.insertQuota({ platform: 'Kept', account: EMAIL_A });
+  const snapshot = target.state();
+  const malformed = open();
+  const malformedPath = malformed.dbPath;
+  malformed.db.exec('ALTER TABLE api_quotas DROP COLUMN account');
+  close(malformed);
+  await assert.rejects(target.restoreBackup(backupBytes(malformedPath, 5)), /备份恢复失败/);
+  assert.deepEqual(target.state(), snapshot);
+  close(target);
+});
+
 test('version 1 migration preserves tasks and creates empty service tables', () => {
   const fixture = legacyFixture(1);
   const store = open(fixture.directory);
   assert.deepEqual(rawRows(store.db, 'tasks'), fixture.tasks);
   assert.deepEqual(store.state().subscriptions, []);
   assert.deepEqual(store.state().quotas, []);
-  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '4');
+  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '5');
   close(store);
 });
 
@@ -216,18 +332,18 @@ test('all/AI/network/other filters exclude trash and preserve expiry order', () 
   close(store);
 });
 
-test('version 4 backups retain new fields, tasks and attachments; corrupt backups leave data unchanged', async () => {
+test('version 5 backups retain new fields, tasks and attachments; corrupt backups leave data unchanged', async () => {
   const source = open();
   source.insertSubscription({ service: 'Network', category: 'network', autoRenew: false });
   source.insertSubscription({ service: 'AI', category: 'ai', autoRenew: true });
   source.insertSubscription({ service: 'Other', autoRenew: null });
-  source.insertQuota({ platform: 'Network quota', category: 'network' });
+  source.insertQuota({ platform: 'Network quota', category: 'network', account: EMAIL_A });
   const task = source.insertTask({ title: 'Attachment owner' });
   const file = source.insertFile('proof.txt', Buffer.from('retained attachment'), 'task', task.id);
   const backup = await source.createBackup();
   const bytes = new Uint8Array(fs.readFileSync(source.backupPath(backup.id)));
   const entries = unzipSync(bytes);
-  assert.equal(JSON.parse(strFromU8(entries['manifest.json'])).schemaVersion, 4);
+  assert.equal(JSON.parse(strFromU8(entries['manifest.json'])).schemaVersion, 5);
   const target = open();
   await target.restoreBackup(bytes);
   assert.deepEqual(target.state(), source.state());
@@ -240,16 +356,16 @@ test('version 4 backups retain new fields, tasks and attachments; corrupt backup
   close(target);
 });
 
-test('legacy version 1, 2 and 3 backups restore and migrate without changing original fields', async () => {
+test('legacy version 1–4 backups restore and migrate without changing original fields', async () => {
   const target = open();
-  for (const version of [3, 2, 1]) {
+  for (const version of [4, 3, 2, 1]) {
     const fixture = legacyFixture(version);
     await target.restoreBackup(backupBytes(fixture.dbPath, version));
-    assert.equal(target.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '4');
+    assert.equal(target.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '5');
     assert.deepEqual(rawRows(target.db, 'tasks'), fixture.tasks);
-    if (version === 3) {
+    if (version >= 3) {
       assert.deepEqual(rawRows(target.db, 'subscriptions'), fixture.subscriptions);
-      assert.ok(target.state().quotas.every(row => row.category === 'ai'));
+      assert.ok(target.state().quotas.every(row => row.category === (version === 3 ? 'ai' : 'other') && row.account === ''));
     } else if (version === 2) {
       const migrated = rawRows(target.db, 'subscriptions');
       assert.deepEqual(migrated.map(({ category, auto_renew, ...row }) => row), fixture.subscriptions);
@@ -265,7 +381,8 @@ test('malformed version 4 quota tables are rejected before replacing the current
   const snapshot = target.state();
   const malformed = open();
   const malformedPath = malformed.dbPath;
-  malformed.db.exec('ALTER TABLE api_quotas DROP COLUMN category');
+  malformed.db.exec('ALTER TABLE api_quotas DROP COLUMN account; ALTER TABLE api_quotas DROP COLUMN category;');
+  malformed.db.prepare("UPDATE settings SET value='4' WHERE key='schema_version'").run();
   close(malformed);
   await assert.rejects(target.restoreBackup(backupBytes(malformedPath, 4)), /备份恢复失败/);
   assert.deepEqual(target.state(), snapshot);
@@ -278,7 +395,7 @@ test('malformed version 3 service tables are rejected before replacing the curre
   const snapshot = target.state();
   const malformed = open();
   const malformedPath = malformed.dbPath;
-  malformed.db.exec('ALTER TABLE subscriptions DROP COLUMN auto_renew; ALTER TABLE api_quotas DROP COLUMN category;');
+  malformed.db.exec('ALTER TABLE subscriptions DROP COLUMN auto_renew; ALTER TABLE api_quotas DROP COLUMN account; ALTER TABLE api_quotas DROP COLUMN category;');
   malformed.db.prepare("UPDATE settings SET value='3' WHERE key='schema_version'").run();
   close(malformed);
   await assert.rejects(target.restoreBackup(backupBytes(malformedPath, 3)), /备份恢复失败/);
@@ -293,7 +410,7 @@ test('Markdown export includes categories and all renewal states while excluding
   store.insertSubscription({ service: 'Other' });
   const deleted = store.insertSubscription({ service: 'Hidden trash' });
   store.deleteEntity('subscription', deleted.id, { version: deleted.version });
-  store.insertQuota({ kind: '中转', platform: 'Relay quota', category: 'network', balance: '9' });
+  store.insertQuota({ kind: '中转', platform: 'Relay quota', category: 'network', account: EMAIL_A, balance: '9' });
   const result = store.exportMarkdown();
   const markdown = fs.readFileSync(path.join(store.root, result.directory, '服务与订阅.md'), 'utf8');
   assert.match(markdown, /\| 分类 \| 服务 \| 账号 \| 套餐 \| 权益 \| 状态 \| 费用 \| 到期 \| 续费 \| 备注 \|/);
@@ -301,8 +418,8 @@ test('Markdown export includes categories and all renewal states while excluding
   assert.match(markdown, /\| AI \| AI \|[^\r\n]*\| 开启 \|/);
   assert.match(markdown, /\| 其他 \| Other \|[^\r\n]*\| 未记录 \|/);
   assert.match(markdown, /## 额度\r?\n/);
-  assert.match(markdown, /\| 分类 \| 类型 \| 平台 \| 入口 \| 余额 \| 记录 \| 备注 \|/);
-  assert.match(markdown, /\| 网络 \| 中转 \| Relay quota \|/);
+  assert.match(markdown, /\| 分类 \| 类型 \| 平台 \| 账号 \| 入口 \| 余额 \| 记录 \| 备注 \|/);
+  assert.match(markdown, /\| 网络 \| 中转 \| Relay quota \| alice@example\.test \|/);
   assert.ok(!markdown.includes('API 额度'));
   assert.ok(!markdown.includes('Hidden trash'));
   assert.ok(!markdown.includes('AI 订阅'));

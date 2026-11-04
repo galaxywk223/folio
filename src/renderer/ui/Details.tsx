@@ -60,7 +60,7 @@ export function QuotaDetail({ quota, onClose, onEdit, onDelete }: { quota: ApiQu
     <DetailToolbar caption="额度" onClose={onClose} onEdit={onEdit} onDelete={onDelete} />
     <div className="detail-scroll">
       <h2 className="detail-title">{quota.platform}</h2>
-      <div className="detail-meta"><span className="badge accent">{subscriptionCategories[quota.category]}</span><span className="badge">{quota.kind}</span>{quota.recordedAt && <span className="badge"><CalendarDays size={13} />记录于 {quota.recordedAt}</span>}</div>
+      <div className="detail-meta"><span className="badge accent">{subscriptionCategories[quota.category]}</span><span className="badge">{quota.kind}</span>{quota.account && <span className="badge">{quota.account}</span>}{quota.recordedAt && <span className="badge"><CalendarDays size={13} />记录于 {quota.recordedAt}</span>}</div>
       <div className="hero-value"><span>余额</span><strong>{quota.balance || '—'}</strong></div>
       <PropertyList rows={[['备注', quota.note]]} />
       <EntryButton url={quota.entryUrl} />
