@@ -27,6 +27,23 @@ export function CategoryManager({ title, itemLabel, route, categories, countOf, 
     finally { setBusy(false); }
   }
 
+  async function move(index: number, offset: -1 | 1) {
+    const target = index + offset;
+    if (busy || target < 0 || target >= categories.length - 1) return;
+    const expectedIds = categories.map(category => category.id);
+    const ids = [...expectedIds];
+    [ids[index], ids[target]] = [ids[target], ids[index]];
+    setBusy(true);
+    setError('');
+    try {
+      await request(route + '/order', 'PATCH', { ids, expectedIds });
+      await onRefresh();
+    } catch (failure) {
+      setError((failure as Error).message);
+      await onRefresh().catch(() => {});
+    } finally { setBusy(false); }
+  }
+
   async function remove() {
     if (busy || !deleting) return;
     setBusy(true);
@@ -58,9 +75,13 @@ export function CategoryManager({ title, itemLabel, route, categories, countOf, 
           <button className="button primary" disabled={busy || !name.trim()}>{editing ? '保存名称' : '新增分类'}</button>
           {editing && <button type="button" className="button secondary" disabled={busy} onClick={() => { setEditing(null); setName(''); setError(''); }}>取消改名</button>}
         </form>
-        {categories.map(category => <div className="category-row" key={category.id}>
+        {categories.map((category, index) => <div className="category-row" key={category.id}>
           <strong>{category.name}</strong>
           {category.id === 'other' ? <span className="badge">默认分类</span> : <>
+            <button className="button secondary" disabled={busy || index === 0} aria-label={'上移 ' + category.name}
+              onClick={() => void move(index, -1)}>上移</button>
+            <button className="button secondary" disabled={busy || index >= categories.length - 2} aria-label={'下移 ' + category.name}
+              onClick={() => void move(index, 1)}>下移</button>
             <button className="button secondary" disabled={busy} aria-label={'重命名 ' + category.name}
               onClick={() => { setEditing(category.id); setName(category.name); setError(''); }}>改名</button>
             <button className="button secondary" disabled={busy} aria-label={'删除 ' + category.name}

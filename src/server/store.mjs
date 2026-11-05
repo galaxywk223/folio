@@ -22,18 +22,19 @@ const fileColumns = 'id,filename,storage_path AS storagePath,size,created_at AS 
 const legacyQuotaColumns = 'id,kind,platform,entry_url AS entryUrl,balance,recorded_at AS recordedAt,note,created_at AS createdAt,updated_at AS updatedAt,deleted_at AS deletedAt,version';
 const v4QuotaColumns = legacyQuotaColumns + ',category';
 const quotaColumns = v4QuotaColumns + ',account';
-const SCHEMA_VERSION = 7;
-const quotaColumnsBySchema = { '2': legacyQuotaColumns, '3': legacyQuotaColumns, '4': v4QuotaColumns, '5': quotaColumns, '6': quotaColumns, '7': quotaColumns };
+const SCHEMA_VERSION = 8;
+const quotaColumnsBySchema = { '2': legacyQuotaColumns, '3': legacyQuotaColumns, '4': v4QuotaColumns, '5': quotaColumns, '6': quotaColumns, '7': quotaColumns, '8': quotaColumns };
 const legacySubColumns = 'id,service,account,plan,benefits,status,cost,expires_at AS expiresAt,entry_url AS entryUrl,note,created_at AS createdAt,updated_at AS updatedAt,deleted_at AS deletedAt,version';
 const subColumns = legacySubColumns + ',category,auto_renew AS autoRenew';
 
 const DEFAULT_SUBSCRIPTION_CATEGORIES = [
-  ['ai', 'AI'], ['development', '开发与云'], ['network', '网络'],
+  ['ai', 'AI'], ['development', '云服务'], ['network', '网络'],
   ['office', '办公'], ['social', '社交'], ['other', '其他'],
 ];
 const DEFAULT_QUOTA_CATEGORIES = [['ai', 'AI'], ['network', '网络'], ['other', '其他']];
-const CATEGORY_TABLE = 'CREATE TABLE subscription_categories(id TEXT PRIMARY KEY, name TEXT NOT NULL);';
-const QUOTA_CATEGORY_TABLE = 'CREATE TABLE quota_categories(id TEXT PRIMARY KEY, name TEXT NOT NULL);';
+const CATEGORY_POSITION = 'sort_order INTEGER NOT NULL DEFAULT 0 CHECK(sort_order >= 0)';
+const CATEGORY_TABLE = 'CREATE TABLE subscription_categories(id TEXT PRIMARY KEY, name TEXT NOT NULL, ' + CATEGORY_POSITION + ');';
+const QUOTA_CATEGORY_TABLE = 'CREATE TABLE quota_categories(id TEXT PRIMARY KEY, name TEXT NOT NULL, ' + CATEGORY_POSITION + ');';
 // 订阅与额度各有一套可管理的分类。
 const CATEGORY_SCOPES = {
   subscription: { table: 'subscription_categories', items: 'subscriptions', label: '订阅', defaults: DEFAULT_SUBSCRIPTION_CATEGORIES },
@@ -77,13 +78,22 @@ const QUOTA_TABLE = `CREATE TABLE IF NOT EXISTS api_quotas(
 const SERVICE_TABLES = CATEGORY_TABLE + QUOTA_CATEGORY_TABLE + SUBSCRIPTION_TABLE + QUOTA_TABLE;
 
 // 备份中的分类表：id、名称合法且不重复，并且包含「其他」。
-function validCategories(rows) {
+function validCategories(rows, ordered) {
   const ids = new Set(rows.map(row => row.id));
   const valid = !rows.some(row => typeof row.id !== 'string' || !row.id || row.id === 'all' ||
       typeof row.name !== 'string' || !row.name || row.name.length > 80 || row.name !== row.name.trim()) &&
     new Set(rows.map(row => row.name.toLowerCase())).size === rows.length &&
     ids.size === rows.length && rows.some(row => row.id === 'other' && row.name === '其他');
-  return valid ? ids : null;
+  if (!valid) return null;
+  if (ordered) {
+    const positions = new Set();
+    for (const row of rows) {
+      if (!Number.isSafeInteger(row.sort_order) || (row.id === 'other' ? row.sort_order !== 0 : row.sort_order < 1) ||
+        positions.has(row.sort_order)) return null;
+      positions.add(row.sort_order);
+    }
+  }
+  return ids;
 }
 const markdownCell = value => value.replaceAll('|', '\\|').replace(/\r?\n/g, ' ');
 
@@ -197,14 +207,18 @@ export class Store {
   ensureSchema() {
     const version = this.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get();
     if (version?.value === String(SCHEMA_VERSION)) return;
-    if (!['1', '2', '3', '4', '5', '6'].includes(version?.value)) throw new Error('数据库版本不受支持，原数据已保留。');
+    if (!['1', '2', '3', '4', '5', '6', '7'].includes(version?.value)) throw new Error('数据库版本不受支持，原数据已保留。');
     this.transaction(() => {
       // v1 没有服务表，直接按最新结构建表；v2–v6 逐级补列，已有记录归为 AI，账号从备注迁出，分类改为可管理。
       if (version.value === '1') {
         this.db.exec(SERVICE_TABLES);
         this.seedCategories('subscription');
         this.seedCategories('quota');
+      } else if (version.value === '7') {
+        this.migrateCategoryOrder('subscription');
+        this.migrateCategoryOrder('quota');
       } else if (version.value === '6') {
+        this.migrateCategoryOrder('subscription');
         this.rebuildQuotaTable();
       } else {
         if (version.value === '2') {
@@ -242,11 +256,37 @@ export class Store {
   }
   seedCategories(scope) {
     const { table, defaults } = CATEGORY_SCOPES[scope];
-    const insert = this.db.prepare('INSERT INTO ' + table + '(id,name) VALUES(?,?)');
-    for (const [id, name] of defaults) insert.run(id, name);
+    const insert = this.db.prepare('INSERT INTO ' + table + '(id,name,sort_order) VALUES(?,?,?)');
+    defaults.forEach(([id, name], index) => insert.run(id, name, id === 'other' ? 0 : index + 1));
+  }
+  migrateCategoryOrder(scope) {
+    const { table } = CATEGORY_SCOPES[scope];
+    this.db.exec('ALTER TABLE ' + table + ' ADD COLUMN ' + CATEGORY_POSITION);
+    this.writeCategoryOrder(scope, this.categories(scope).map(row => row.id));
   }
   categories(scope) {
-    return this.db.prepare('SELECT id,name FROM ' + CATEGORY_SCOPES[scope].table + ' ORDER BY rowid').all();
+    return this.db.prepare('SELECT id,name FROM ' + CATEGORY_SCOPES[scope].table + " ORDER BY id='other',sort_order,rowid").all();
+  }
+  writeCategoryOrder(scope, ids) {
+    const update = this.db.prepare('UPDATE ' + CATEGORY_SCOPES[scope].table + ' SET sort_order=? WHERE id=?');
+    ids.forEach((id, index) => update.run(id === 'other' ? 0 : index + 1, id));
+  }
+  reorderCategories(scope, input) {
+    return this.transaction(() => {
+      const ids = input?.ids;
+      const current = this.categories(scope).map(row => row.id);
+      if (!Array.isArray(ids) || ids.length !== current.length || ids.at(-1) !== 'other' ||
+        new Set(ids).size !== current.length || current.some(id => !ids.includes(id))) {
+        throw new AppError('分类顺序无效或分类已变化，请刷新后重试。');
+      }
+      const expected = input.expectedIds;
+      if (expected !== undefined && (!Array.isArray(expected) || expected.length !== current.length ||
+        current.some((id, index) => id !== expected[index]))) {
+        throw new AppError('分类顺序已变化，请刷新后重试。', 409, 'CATEGORY_ORDER_CHANGED');
+      }
+      this.writeCategoryOrder(scope, ids);
+      return this.categories(scope);
+    });
   }
   categoryId(scope, id) {
     const { table, label } = CATEGORY_SCOPES[scope];
@@ -267,7 +307,7 @@ export class Store {
       if (this.categories(scope).some(row => row.id !== id && row.name.toLowerCase() === name.toLowerCase())) {
         throw new AppError('分类名称已存在。', 409, 'CATEGORY_EXISTS');
       }
-      if (creating) this.db.prepare('INSERT INTO ' + table + '(id,name) VALUES(?,?)').run(id, name);
+      if (creating) this.db.prepare('INSERT INTO ' + table + '(id,name,sort_order) SELECT ?,?,COALESCE(MAX(sort_order),0)+1 FROM ' + table).run(id, name);
       else this.db.prepare('UPDATE ' + table + ' SET name=? WHERE id=?').run(name, id);
       return { id, name };
     });
@@ -604,7 +644,7 @@ export class Store {
     let entries, manifest;
     try { entries = unzipSync(bytes); manifest = JSON.parse(strFromU8(entries['manifest.json'])); }
     catch { throw new AppError('文件不是有效的完整备份。'); }
-    const okFormat = (manifest.format === 'folio-backup' && [2, 3, 4, 5, 6, 7].includes(manifest.schemaVersion))
+    const okFormat = (manifest.format === 'folio-backup' && [2, 3, 4, 5, 6, 7, 8].includes(manifest.schemaVersion))
       || (manifest.format === 'daily-affairs-backup' && manifest.schemaVersion === 1);
     if (!okFormat || !manifest.files || !entries['data.sqlite']) throw new AppError('备份版本或结构不受支持。');
     for (const [name, checksum] of Object.entries(manifest.files)) {
@@ -624,19 +664,22 @@ export class Store {
       validationDb = new DatabaseSync(candidatePath, { readOnly: true });
       if (validationDb.prepare('PRAGMA integrity_check').get().integrity_check !== 'ok') throw new AppError('备份数据库校验失败。');
       const schema = validationDb.prepare("SELECT value FROM settings WHERE key='schema_version'").get()?.value;
-      if (!['1', '2', '3', '4', '5', '6', '7'].includes(schema) || Number(schema) !== manifest.schemaVersion) throw new AppError('备份数据库校验失败。');
+      if (!['1', '2', '3', '4', '5', '6', '7', '8'].includes(schema) || Number(schema) !== manifest.schemaVersion) throw new AppError('备份数据库校验失败。');
       validationDb.prepare('SELECT ' + taskColumns + ' FROM tasks').all();
       validationDb.prepare('SELECT ' + noteColumns + ' FROM notes').all();
       validationDb.prepare('SELECT * FROM attachment_links').all();
       if (schema !== '1') {
         const quotas = validationDb.prepare('SELECT ' + quotaColumnsBySchema[schema] + ' FROM api_quotas').all();
-        const quotaCategoryIds = schema === '7' ? validCategories(validationDb.prepare('SELECT id,name FROM quota_categories').all()) : null;
-        if (schema === '7' && !quotaCategoryIds) throw new AppError('备份额度分类校验失败。');
-        if (['4', '5', '6', '7'].includes(schema) && quotas.some(row => !(schema === '7' ? quotaCategoryIds.has(row.category) : isServiceCategory(row.category)))) throw new AppError('备份额度字段校验失败。');
-        if (['5', '6', '7'].includes(schema) && quotas.some(row => typeof row.account !== 'string')) throw new AppError('备份额度字段校验失败。');
+        const ordered = schema === '8';
+        const categoryColumns = ordered ? 'id,name,sort_order' : 'id,name';
+        const managedQuotas = ['7', '8'].includes(schema);
+        const quotaCategoryIds = managedQuotas ? validCategories(validationDb.prepare('SELECT ' + categoryColumns + ' FROM quota_categories').all(), ordered) : null;
+        if (managedQuotas && !quotaCategoryIds) throw new AppError('备份额度分类校验失败。');
+        if (['4', '5', '6', '7', '8'].includes(schema) && quotas.some(row => !(managedQuotas ? quotaCategoryIds.has(row.category) : isServiceCategory(row.category)))) throw new AppError('备份额度字段校验失败。');
+        if (['5', '6', '7', '8'].includes(schema) && quotas.some(row => typeof row.account !== 'string')) throw new AppError('备份额度字段校验失败。');
         const subscriptions = validationDb.prepare('SELECT ' + (schema === '2' ? legacySubColumns : subColumns) + ' FROM subscriptions').all();
-        const managed = ['6', '7'].includes(schema);
-        const categoryIds = managed ? validCategories(validationDb.prepare('SELECT id,name FROM subscription_categories').all()) : null;
+        const managed = ['6', '7', '8'].includes(schema);
+        const categoryIds = managed ? validCategories(validationDb.prepare('SELECT ' + categoryColumns + ' FROM subscription_categories').all(), ordered) : null;
         if (managed && !categoryIds) throw new AppError('备份订阅分类校验失败。');
         if (schema !== '2' && subscriptions.some(row =>
           !(managed ? categoryIds.has(row.category) : isServiceCategory(row.category)) || ![null, 0, 1].includes(row.autoRenew))) {
