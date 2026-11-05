@@ -1,10 +1,8 @@
 import { useEffect, useState } from 'react';
 import { AlertCircle, Save, X } from 'lucide-react';
-import { serviceCategories } from '../../shared/subscriptions';
 import type { SubscriptionCategory } from '../../shared/subscriptions';
 import type { QuotaDraft, SubscriptionDraft } from '../types';
 
-const categoryOptions = Object.entries(serviceCategories).map(([value, label]) => <option key={value} value={value}>{label}</option>);
 
 function Field({ id, label, wide, children }: { id: string; label: string; wide?: boolean; children: React.ReactNode }) {
   return <div className={'field' + (wide ? ' wide' : '')}><label className="field-label" htmlFor={id}>{label}</label>{children}</div>;
@@ -49,7 +47,7 @@ export function ServiceEditor({ kind, initial, isNew, categories, onSave, onCanc
         <Field id="q-platform" label="平台">{text('q-platform', 'platform', quota.platform, { autoFocus: true })}</Field>
         <Field id="q-category" label="分类">
           <select id="q-category" className="input" value={quota.category} onChange={e => setField('category', e.target.value)} disabled={saving}>
-            {categoryOptions}
+            {categories?.map(({ id, name }) => <option key={id} value={id}>{name}</option>)}
           </select>
         </Field>
         <Field id="q-account" label="账号" wide>{text('q-account', 'account', quota.account)}</Field>

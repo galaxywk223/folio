@@ -2,6 +2,13 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.4.0] - 2026-11-05
+
+- 额度也支持「管理分类」，可以新增、改名和删除，和订阅分类分开管理。删除分类时，其中的额度（包括回收站里的）会移到「其他」；「其他」不能改名或删除。
+- 数据库升级到版本 7：额度分类改存在 `quota_categories` 表里，已有额度的分类和账号保持不变。
+- 额度的筛选、编辑器、详情、搜索和 Markdown 导出都改用自定义分类名。
+- 仍可恢复版本 1–6 的备份；会校验版本 7 备份里的额度分类。
+
 ## [1.3.0] - 2026-11-05
 
 - 订阅支持管理分类，可新增、改名和删除。删除的分类下的订阅会移入「其他」。
@@ -47,6 +54,8 @@
 
 - 首个正式版：日常事务与订阅合并，支持应用内更新。
 
+[1.4.0]: https://github.com/galaxywk223/folio/releases/tag/v1.4.0
+[1.3.0]: https://github.com/galaxywk223/folio/releases/tag/v1.3.0
 [1.2.0]: https://github.com/galaxywk223/folio/releases/tag/v1.2.0
 [1.1.0]: https://github.com/galaxywk223/folio/releases/tag/v1.1.0
 [1.0.4]: https://github.com/galaxywk223/folio/releases/tag/v1.0.4

@@ -1,7 +1,6 @@
 import type { RefObject, UIEvent } from 'react';
 import { Archive, CalendarDays, CheckCircle2, Circle, CreditCard, KeyRound, ListChecks, Loader2, Trash2, Wallet } from 'lucide-react';
 import { getSteps } from '../../shared/markdown';
-import { serviceCategories } from '../../shared/subscriptions';
 import { dateTime } from '../api';
 import { Empty } from '../components';
 import { expiryClass, expiryLabel, expiryUrgent } from '../format';
@@ -19,13 +18,13 @@ const emptyIcons: Record<View, React.ReactNode> = {
   subscriptions: <CreditCard size={26} />, trash: <Trash2 size={26} />,
 };
 
-export function ItemList({ listRef, loaded, error, items, view, searching, selection, busy, filtersLocked, filter, subscriptionCategories, onManageCategories, header, onFilter, onChoose, onNew, onClearSearch, onReload, onScroll }: {
+export function ItemList({ listRef, loaded, error, items, view, searching, selection, busy, filtersLocked, filter, subscriptionCategories, quotaCategories, onManageCategories, header, onFilter, onChoose, onNew, onClearSearch, onReload, onScroll }: {
   listRef: RefObject<HTMLElement | null>; loaded: boolean; error: string; items: Item[]; view: View; searching: boolean;
-  selection: Selection | null; busy: boolean; filtersLocked: boolean; filter: string; subscriptionCategories: ReadonlyMap<string, string>; onManageCategories?: () => void; header?: React.ReactNode;
+  selection: Selection | null; busy: boolean; filtersLocked: boolean; filter: string; subscriptionCategories: ReadonlyMap<string, string>; quotaCategories: ReadonlyMap<string, string>; onManageCategories?: () => void; header?: React.ReactNode;
   onFilter: (filter: string) => void; onChoose: (item: Item) => void; onNew?: () => void;
   onClearSearch: () => void; onReload: () => void; onScroll: (event: UIEvent<HTMLElement>) => void;
 }) {
-  const categories = view === 'subscriptions' ? [...subscriptionCategories] : Object.entries(serviceCategories);
+  const categories = [...(view === 'subscriptions' ? subscriptionCategories : quotaCategories)];
   const inTrash = view === 'trash' && !searching;
   return <section ref={listRef} className="list-pane card" aria-label="内容列表" onScroll={onScroll}>
     {header}
@@ -53,7 +52,7 @@ export function ItemList({ listRef, loaded, error, items, view, searching, selec
                 : item.kind === 'quota' ? <Wallet size={17} /> : <CreditCard size={17} />}
             </span>
             <span className="row-content"><strong>{item.title}</strong><span className="row-metadata">
-              {inTrash ? <span>删除于 {dateTime(item.entity.deletedAt)}</span> : <RowMeta item={item} searching={searching} subscriptionCategories={subscriptionCategories} />}
+              {inTrash ? <span>删除于 {dateTime(item.entity.deletedAt)}</span> : <RowMeta item={item} searching={searching} subscriptionCategories={subscriptionCategories} quotaCategories={quotaCategories} />}
             </span></span>
             {item.kind === 'quota' && !inTrash && <span className="row-value">{(item.entity as ApiQuota).balance || '—'}</span>}
           </button>
@@ -62,7 +61,7 @@ export function ItemList({ listRef, loaded, error, items, view, searching, selec
   </section>;
 }
 
-function RowMeta({ item, searching, subscriptionCategories }: { item: Item; searching: boolean; subscriptionCategories: ReadonlyMap<string, string> }) {
+function RowMeta({ item, searching, subscriptionCategories, quotaCategories }: { item: Item; searching: boolean; subscriptionCategories: ReadonlyMap<string, string>; quotaCategories: ReadonlyMap<string, string> }) {
   if (item.kind === 'task') {
     const task = item.entity as Task;
     const steps = getSteps(task.bodyMarkdown);
@@ -75,7 +74,7 @@ function RowMeta({ item, searching, subscriptionCategories }: { item: Item; sear
   if (item.kind === 'quota') {
     const quota = item.entity as ApiQuota;
     return <>
-      <span className="badge">{serviceCategories[quota.category]}</span>
+      <span className="badge">{quotaCategories.get(quota.category)}</span>
       <span className="badge">{quota.kind}</span>
       {quota.recordedAt && <span>记录于 {quota.recordedAt}</span>}
     </>;

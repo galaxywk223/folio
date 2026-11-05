@@ -1,4 +1,4 @@
-import type { ServiceCategory, SubscriptionCategory } from '../shared/subscriptions';
+import type { SubscriptionCategory } from '../shared/subscriptions';
 
 export type Kind = 'task' | 'quota' | 'subscription';
 export type View = 'pending' | 'completed' | 'quotas' | 'subscriptions' | 'trash';
@@ -10,7 +10,7 @@ export type Note = { id: string; title: string; bodyMarkdown: string; createdAt:
 export type Attachment = { id: string; filename: string; storagePath: string; size: number; createdAt: string; deletedAt: string | null };
 export type Link = { attachmentId: string; ownerType: 'task' | 'note'; ownerId: string };
 export type ApiQuota = {
-  id: string; kind: '官方' | '中转'; category: ServiceCategory; platform: string; account: string; entryUrl: string; balance: string; recordedAt: string;
+  id: string; kind: '官方' | '中转'; category: string; platform: string; account: string; entryUrl: string; balance: string; recordedAt: string;
   note: string; createdAt: string; updatedAt: string; deletedAt: string | null; version: number;
 };
 export type Subscription = {
@@ -20,12 +20,12 @@ export type Subscription = {
 };
 export type State = {
   tasks: Task[]; notes: Note[]; attachments: Attachment[]; links: Link[];
-  quotas: ApiQuota[]; subscriptions: Subscription[]; subscriptionCategories: SubscriptionCategory[];
+  quotas: ApiQuota[]; subscriptions: Subscription[]; subscriptionCategories: SubscriptionCategory[]; quotaCategories: SubscriptionCategory[];
   migration: { tasks: number; steps: number; notes: number; attachments: number; sourceHashes: Record<string, string> } | null;
 };
 export type Selection = { kind: Kind; id: string };
 export type EditorValue = { title: string; dateText?: string; bodyMarkdown: string; version?: number };
-export type QuotaDraft = { kind: '官方' | '中转'; category: ServiceCategory; platform: string; account: string; entryUrl: string; balance: string; recordedAt: string; note: string; version?: number };
+export type QuotaDraft = { kind: '官方' | '中转'; category: string; platform: string; account: string; entryUrl: string; balance: string; recordedAt: string; note: string; version?: number };
 export type SubscriptionDraft = {
   service: string; account: string; plan: string; benefits: string; status: string; cost: string;
   category: string; autoRenew: boolean | null;

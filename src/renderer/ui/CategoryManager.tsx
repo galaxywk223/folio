@@ -1,17 +1,18 @@
 import { useState } from 'react';
 import { request } from '../api';
 import { Modal } from '../components';
+import type { SubscriptionCategory } from '../../shared/subscriptions';
 import type { State } from '../types';
 
-export function CategoryManager({ state, onClose, onRefresh }: {
-  state: State; onClose: () => void; onRefresh: () => Promise<State>;
+export function CategoryManager({ title, itemLabel, route, categories, countOf, onClose, onRefresh }: {
+  title: string; itemLabel: string; route: string; categories: SubscriptionCategory[]; countOf: (id: string) => number;
+  onClose: () => void; onRefresh: () => Promise<State>;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [deleting, setDeleting] = useState<{ id: string; name: string; count: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const route = '/api/subscription-categories';
 
   async function save() {
     if (busy || !name.trim()) return;
@@ -42,10 +43,10 @@ export function CategoryManager({ state, onClose, onRefresh }: {
     }
   }
 
-  return <Modal open onOpenChange={open => { if (!open && !busy) onClose(); }} title="管理订阅分类">
+  return <Modal open onOpenChange={open => { if (!open && !busy) onClose(); }} title={title}>
     <div className="category-manager">
       {deleting ? <>
-        <p>删除「{deleting.name}」后，{deleting.count} 条订阅将移到「其他」，数量包含回收站中的订阅。</p>
+        <p>删除「{deleting.name}」后，{deleting.count} 条{itemLabel}将移到「其他」，数量包含回收站中的{itemLabel}。</p>
         <div className="category-row">
           <button className="button secondary" disabled={busy} onClick={() => setDeleting(null)}>取消</button>
           <button className="button danger" disabled={busy} onClick={() => void remove()}>确认删除分类</button>
@@ -57,7 +58,7 @@ export function CategoryManager({ state, onClose, onRefresh }: {
           <button className="button primary" disabled={busy || !name.trim()}>{editing ? '保存名称' : '新增分类'}</button>
           {editing && <button type="button" className="button secondary" disabled={busy} onClick={() => { setEditing(null); setName(''); setError(''); }}>取消改名</button>}
         </form>
-        {state.subscriptionCategories.map(category => <div className="category-row" key={category.id}>
+        {categories.map(category => <div className="category-row" key={category.id}>
           <strong>{category.name}</strong>
           {category.id === 'other' ? <span className="badge">默认分类</span> : <>
             <button className="button secondary" disabled={busy} aria-label={'重命名 ' + category.name}
@@ -67,7 +68,7 @@ export function CategoryManager({ state, onClose, onRefresh }: {
                 setError('');
                 setEditing(null);
                 setName('');
-                setDeleting({ ...category, count: state.subscriptions.filter(item => item.category === category.id).length });
+                setDeleting({ ...category, count: countOf(category.id) });
               }}>删除</button>
           </>}
         </div>)}
