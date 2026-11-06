@@ -1,7 +1,8 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, shell, Tray } from 'electron'
 import updaterPackage from 'electron-updater'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import trayIconPath from '../../assets/icon.png?asset'
 import { startServer } from '../server/server.mjs'
 import { UpdateManager } from './updater'
 
@@ -17,18 +18,17 @@ app.setPath('userData', join(localAppData, 'FolioApp'))
 let mainWindow: BrowserWindow | null = null
 let closeServer: (() => void) | null = null
 let updates: UpdateManager | null = null
+let tray: Tray | null = null
 let apiPort = 0
-let quitting = false
+let installing = false
+let isQuitting = false
+let trayHintShown = false
 
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
-    if (!mainWindow) return
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.focus()
-  })
+  app.on('second-instance', () => { void showMainWindow() })
   void app.whenReady().then(start).catch((error) => {
     dialog.showErrorBox('Folio 启动失败', error instanceof Error ? error.message : String(error))
     app.exit(1)
@@ -64,7 +64,8 @@ async function start(): Promise<void> {
     beforeInstall: async () => {
       closeServer?.()
       closeServer = null
-      quitting = true
+      installing = true
+      isQuitting = true
     },
     onDownloaded: (status) => { void promptForDownloadedUpdate(status.available_version) },
   })
@@ -73,12 +74,33 @@ async function start(): Promise<void> {
   ipcMain.handle('folio:updates-check', () => updates?.check())
   ipcMain.handle('folio:updates-install', () => updates?.install())
 
+  createTray()
   mainWindow = await createWindow()
   updates.startAutoCheck()
-  mainWindow.on('closed', () => { mainWindow = null })
-  app.on('activate', async () => {
-    if (BrowserWindow.getAllWindows().length === 0) mainWindow = await createWindow()
-  })
+  app.on('activate', () => { void showMainWindow() })
+}
+
+function createTray(): void {
+  const icon = nativeImage.createFromPath(trayIconPath).resize({ width: 16, height: 16 })
+  tray = new Tray(icon)
+  tray.setToolTip('Folio')
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: '显示 Folio', click: () => { void showMainWindow() } },
+    { type: 'separator' },
+    { label: '退出', click: () => app.quit() },
+  ]))
+  tray.on('click', () => { void showMainWindow() })
+  tray.on('double-click', () => { void showMainWindow() })
+}
+
+async function showMainWindow(): Promise<void> {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    mainWindow = await createWindow()
+    return
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
 }
 
 async function createWindow(): Promise<BrowserWindow> {
@@ -111,6 +133,23 @@ async function createWindow(): Promise<BrowserWindow> {
     }
   })
   window.once('ready-to-show', () => window.show())
+  window.on('close', (event) => {
+    if (isQuitting) return
+    event.preventDefault()
+    window.hide()
+    if (!trayHintShown && tray) {
+      trayHintShown = true
+      tray.displayBalloon({
+        iconType: 'info',
+        title: 'Folio 仍在运行',
+        content: '已最小化到托盘，右键托盘图标可退出。',
+      })
+    }
+  })
+  window.on('session-end', () => { isQuitting = true })
+  window.on('closed', () => {
+    if (mainWindow === window) mainWindow = null
+  })
 
   const devUrl = process.env.ELECTRON_RENDERER_URL
   if (devUrl) await window.loadURL(devUrl)
@@ -128,15 +167,22 @@ async function confirmUpdateInstall(): Promise<boolean> {
     defaultId: 1,
     cancelId: 0,
   }
-  const result = mainWindow
-    ? await dialog.showMessageBox(mainWindow, options)
-    : await dialog.showMessageBox(options)
+  const result = await showDialog(options)
   return result.response === 1
 }
 
+function visibleWindow(): BrowserWindow | null {
+  return mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() ? mainWindow : null
+}
+
+function showDialog(options: Electron.MessageBoxOptions): Promise<Electron.MessageBoxReturnValue> {
+  const parent = visibleWindow()
+  return parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options)
+}
+
 async function promptForDownloadedUpdate(version: string | null): Promise<void> {
-  if (!mainWindow || mainWindow.isDestroyed() || !updates) return
-  const result = await dialog.showMessageBox(mainWindow, {
+  if (!updates) return
+  const result = await showDialog({
     type: 'info',
     title: '更新已下载',
     message: version ? `Folio v${version} 已准备就绪` : '新版 Folio 已准备就绪',
@@ -145,15 +191,17 @@ async function promptForDownloadedUpdate(version: string | null): Promise<void> 
     defaultId: 1,
     cancelId: 0,
   })
-  if (result.response === 1) await updates.install()
+  if (result.response === 1) await updates.install({ confirmed: true })
 }
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
-})
+// Folio stays in the tray after its window closes; quit from the tray menu.
+app.on('window-all-closed', () => {})
 
 app.on('before-quit', () => {
-  if (quitting) return
+  isQuitting = true
+  tray?.destroy()
+  tray = null
+  if (installing) return
   updates?.stop()
   closeServer?.()
   closeServer = null

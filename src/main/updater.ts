@@ -85,9 +85,9 @@ export class UpdateManager {
     return this.checkPromise
   }
 
-  async install(): Promise<{ started: boolean }> {
+  async install(options: { confirmed?: boolean } = {}): Promise<{ started: boolean }> {
     if (this.status.phase !== 'downloaded') throw new Error('尚未下载可安装的更新')
-    if (!(await this.options.confirmInstall())) return { started: false }
+    if (!options.confirmed && !(await this.options.confirmInstall())) return { started: false }
     await this.options.beforeInstall()
     this.options.client.quitAndInstall(false, true)
     return { started: true }

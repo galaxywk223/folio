@@ -16,3 +16,8 @@ declare module '../server/server.mjs' {
 }
 
 declare module '*.mjs'
+
+declare module '*?asset' {
+  const path: string
+  export default path
+}
