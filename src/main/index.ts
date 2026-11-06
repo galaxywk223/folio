@@ -4,6 +4,9 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import trayIconPath from '../../assets/icon.png?asset'
 import { startServer } from '../server/server.mjs'
+import { ensureCliOnPath } from './cli-path'
+import { ReminderScheduler } from './reminders'
+import type { NavigateTarget } from './reminders'
 import { UpdateManager } from './updater'
 
 const { autoUpdater } = updaterPackage
@@ -13,7 +16,10 @@ const localAppData = process.env.LOCALAPPDATA || app.getPath('appData')
 const dataRoot = process.env.FOLIO_DATA_DIR
   || (app.isPackaged ? join(localAppData, 'Folio') : join(app.getAppPath(), 'data'))
 
-app.setPath('userData', join(localAppData, 'FolioApp'))
+// 开发运行用单独的目录，不会和已安装的 Folio 抢单实例锁。
+app.setPath('userData', join(localAppData, app.isPackaged ? 'FolioApp' : 'FolioApp-dev'))
+// 与 build.appId 一致，Windows 通知才会显示 Folio 的名称和图标。
+app.setAppUserModelId('com.galaxywk.folio')
 
 let mainWindow: BrowserWindow | null = null
 let closeServer: (() => void) | null = null
@@ -23,6 +29,9 @@ let apiPort = 0
 let installing = false
 let isQuitting = false
 let trayHintShown = false
+let reminders: ReminderScheduler | null = null
+// 命令行在 Folio 未运行时用 --hidden 启动：只进托盘，不弹出窗口。
+const startHidden = process.argv.includes('--hidden')
 
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
@@ -41,6 +50,12 @@ async function start(): Promise<void> {
   const running = await startServer(dataRoot, undefined, { allowDevOrigins: true })
   closeServer = running.close
   apiPort = running.port
+  reminders = new ReminderScheduler({
+    store: running.store,
+    statePath: join(app.getPath('userData'), 'reminders.json'),
+    onOpen: (target) => { void openTarget(target) },
+    onError: (error) => console.error('Folio 提醒检查失败', error),
+  })
 
   ipcMain.handle('folio:get-api-base', () => `http://127.0.0.1:${apiPort}`)
   ipcMain.handle('folio:open-external', async (_event, url: string) => {
@@ -75,8 +90,10 @@ async function start(): Promise<void> {
   ipcMain.handle('folio:updates-install', () => updates?.install())
 
   createTray()
-  mainWindow = await createWindow()
+  mainWindow = await createWindow(!startHidden)
   updates.startAutoCheck()
+  reminders.start()
+  if (app.isPackaged) void ensureCliOnPath(process.resourcesPath).catch(error => console.error('无法把 folio 命令加入 PATH', error))
   app.on('activate', () => { void showMainWindow() })
 }
 
@@ -93,6 +110,11 @@ function createTray(): void {
   tray.on('double-click', () => { void showMainWindow() })
 }
 
+async function openTarget(target: NavigateTarget): Promise<void> {
+  await showMainWindow()
+  mainWindow?.webContents.send('folio:navigate', target)
+}
+
 async function showMainWindow(): Promise<void> {
   if (!mainWindow || mainWindow.isDestroyed()) {
     mainWindow = await createWindow()
@@ -103,7 +125,7 @@ async function showMainWindow(): Promise<void> {
   mainWindow.focus()
 }
 
-async function createWindow(): Promise<BrowserWindow> {
+async function createWindow(visible = true): Promise<BrowserWindow> {
   const window = new BrowserWindow({
     title: 'Folio',
     width: 1280,
@@ -132,7 +154,7 @@ async function createWindow(): Promise<BrowserWindow> {
       if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
     }
   })
-  window.once('ready-to-show', () => window.show())
+  if (visible) window.once('ready-to-show', () => window.show())
   window.on('close', (event) => {
     if (isQuitting) return
     event.preventDefault()
@@ -201,6 +223,7 @@ app.on('before-quit', () => {
   isQuitting = true
   tray?.destroy()
   tray = null
+  reminders?.stop()
   if (installing) return
   updates?.stop()
   closeServer?.()

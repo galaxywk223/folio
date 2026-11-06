@@ -21,7 +21,7 @@ export function createApp(store, options = {}) {
       if (!allowed) return res.status(403).json({ error: '跨站请求已拒绝。' });
       if (origin !== 'http://' + host) {
         res.setHeader('Access-Control-Allow-Origin', origin);
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Folio-App, X-Daily-App');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Folio-App, X-Daily-App, X-Folio-Source');
         res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
       }
     }
@@ -37,19 +37,27 @@ export function createApp(store, options = {}) {
   });
   app.use(express.json({ limit: '6mb' }));
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024, files: 20 } });
+  // 写入按请求头 X-Folio-Source 记录来源（命令行传 cli），默认是应用内。
+  const as = (req, work) => store.as(req.get('x-folio-source') || 'app', work);
   const restoreUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 512 * 1024 * 1024, files: 1 } });
   app.get('/api/health', (_req, res) => res.json({ app: 'folio', version: '1.0.0', pid: process.pid, root: store.root }));
   app.get('/api/state', (_req, res) => res.json(store.state()));
-  app.post('/api/tasks', (req, res) => res.status(201).json(store.insertTask(req.body)));
-  app.patch('/api/tasks/:id', (req, res) => res.json(store.updateTask(req.params.id, req.body)));
-  app.post('/api/tasks/:id/steps', (req, res) => res.json(store.toggleTaskStep(req.params.id, req.body)));
-  app.delete('/api/tasks/:id', (req, res) => { store.deleteEntity('task', req.params.id, req.body); res.status(204).end(); });
-  app.post('/api/notes', (req, res) => res.status(201).json(store.insertNote(req.body)));
-  app.patch('/api/notes/:id', (req, res) => res.json(store.updateNote(req.params.id, req.body)));
-  app.delete('/api/notes/:id', (req, res) => { store.deleteEntity('note', req.params.id, req.body); res.status(204).end(); });
-  app.post('/api/quotas', (req, res) => res.status(201).json(store.insertQuota(req.body)));
-  app.patch('/api/quotas/:id', (req, res) => res.json(store.updateQuota(req.params.id, req.body)));
-  app.delete('/api/quotas/:id', (req, res) => { store.deleteEntity('quota', req.params.id, req.body); res.status(204).end(); });
+  app.get('/api/revision', (_req, res) => res.json({ revision: store.revision() }));
+  app.get('/api/activity', (req, res) => res.json(store.activity(req.query)));
+  app.post('/api/events', (req, res) => res.status(201).json(as(req, () => store.insertEvent(req.body))));
+  app.patch('/api/events/:id', (req, res) => res.json(as(req, () => store.updateEvent(req.params.id, req.body))));
+  app.post('/api/events/:id/skip', (req, res) => res.json(as(req, () => store.skipEventOccurrence(req.params.id, req.body))));
+  app.delete('/api/events/:id', (req, res) => { as(req, () => store.deleteEntity('event', req.params.id, req.body)); res.status(204).end(); });
+  app.post('/api/tasks', (req, res) => res.status(201).json(as(req, () => store.insertTask(req.body))));
+  app.patch('/api/tasks/:id', (req, res) => res.json(as(req, () => store.updateTask(req.params.id, req.body))));
+  app.post('/api/tasks/:id/steps', (req, res) => res.json(as(req, () => store.toggleTaskStep(req.params.id, req.body))));
+  app.delete('/api/tasks/:id', (req, res) => { as(req, () => store.deleteEntity('task', req.params.id, req.body)); res.status(204).end(); });
+  app.post('/api/notes', (req, res) => res.status(201).json(as(req, () => store.insertNote(req.body))));
+  app.patch('/api/notes/:id', (req, res) => res.json(as(req, () => store.updateNote(req.params.id, req.body))));
+  app.delete('/api/notes/:id', (req, res) => { as(req, () => store.deleteEntity('note', req.params.id, req.body)); res.status(204).end(); });
+  app.post('/api/quotas', (req, res) => res.status(201).json(as(req, () => store.insertQuota(req.body))));
+  app.patch('/api/quotas/:id', (req, res) => res.json(as(req, () => store.updateQuota(req.params.id, req.body))));
+  app.delete('/api/quotas/:id', (req, res) => { as(req, () => store.deleteEntity('quota', req.params.id, req.body)); res.status(204).end(); });
   app.post('/api/quota-categories', (req, res) => res.status(201).json(store.saveQuotaCategory(req.body)));
   app.patch('/api/quota-categories/order', (req, res) => res.json(store.reorderCategories('quota', req.body)));
   app.patch('/api/quota-categories/:id', (req, res) => res.json(store.saveQuotaCategory(req.body, req.params.id, false)));
@@ -58,9 +66,9 @@ export function createApp(store, options = {}) {
   app.patch('/api/subscription-categories/order', (req, res) => res.json(store.reorderCategories('subscription', req.body)));
   app.patch('/api/subscription-categories/:id', (req, res) => res.json(store.saveSubscriptionCategory(req.body, req.params.id, false)));
   app.delete('/api/subscription-categories/:id', (req, res) => { store.deleteSubscriptionCategory(req.params.id, req.body); res.status(204).end(); });
-  app.post('/api/subscriptions', (req, res) => res.status(201).json(store.insertSubscription(req.body)));
-  app.patch('/api/subscriptions/:id', (req, res) => res.json(store.updateSubscription(req.params.id, req.body)));
-  app.delete('/api/subscriptions/:id', (req, res) => { store.deleteEntity('subscription', req.params.id, req.body); res.status(204).end(); });
+  app.post('/api/subscriptions', (req, res) => res.status(201).json(as(req, () => store.insertSubscription(req.body))));
+  app.patch('/api/subscriptions/:id', (req, res) => res.json(as(req, () => store.updateSubscription(req.params.id, req.body))));
+  app.delete('/api/subscriptions/:id', (req, res) => { as(req, () => store.deleteEntity('subscription', req.params.id, req.body)); res.status(204).end(); });
   app.post('/api/attachments', upload.array('files', 20), (req, res) => {
     if (!req.files?.length) throw new AppError('未选择附件文件。');
     const files = req.files.map(file => store.insertFile(Buffer.from(file.originalname, 'latin1').toString('utf8'), file.buffer, req.body.ownerType, req.body.ownerId));
@@ -73,7 +81,7 @@ export function createApp(store, options = {}) {
   app.delete('/api/attachments/:id', (req, res) => { store.deleteEntity('attachment', req.params.id); res.status(204).end(); });
   app.post('/api/attachments/:id/links', (req, res) => { store.setLink(req.params.id, req.body); res.status(204).end(); });
   app.delete('/api/attachments/:id/links', (req, res) => { store.setLink(req.params.id, req.body, true); res.status(204).end(); });
-  app.post('/api/trash/:type/:id/restore', (req, res) => { store.restoreEntity(req.params.type, req.params.id); res.status(204).end(); });
+  app.post('/api/trash/:type/:id/restore', (req, res) => { as(req, () => store.restoreEntity(req.params.type, req.params.id)); res.status(204).end(); });
   app.get('/api/backups', (_req, res) => res.json(store.listBackups()));
   app.post('/api/backups', async (_req, res) => res.status(201).json(await store.createBackup()));
   app.get('/api/backups/:id/download', (req, res, next) => res.download(store.backupPath(req.params.id), 'Folio备份-' + req.params.id, error => { if (error) next(error); }));

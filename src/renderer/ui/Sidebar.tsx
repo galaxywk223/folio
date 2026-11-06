@@ -1,11 +1,13 @@
-import { CheckCircle2, Circle, CreditCard, HardDrive, Trash2, Wallet } from 'lucide-react';
+import { CalendarRange, CheckCircle2, Circle, CreditCard, HardDrive, History, Sun, Trash2, Wallet } from 'lucide-react';
 import { UpdatePanel } from './UpdatePanel';
 import type { View } from '../types';
 
-type Counts = Record<'pending' | 'completed' | 'quotas' | 'subscriptions', number>;
+type Counts = Record<'today' | 'schedule' | 'pending' | 'completed' | 'quotas' | 'subscriptions', number>;
 
 const groups = [
   { caption: '事务', label: '事务导航', items: [
+    { id: 'today' as const, title: '今天', icon: Sun },
+    { id: 'schedule' as const, title: '日程', icon: CalendarRange },
     { id: 'pending' as const, title: '待办', icon: Circle },
     { id: 'completed' as const, title: '已完成', icon: CheckCircle2 },
   ] },
@@ -30,6 +32,7 @@ export function Sidebar({ active, counts, trashCount, onView, onData, onNotice, 
     </div>)}
     <div className="sidebar-bottom">
       <button className={'nav-item ' + (active === 'trash' ? 'active' : '')} onClick={() => onView('trash')} title="回收站"><Trash2 size={17} /><span>回收站</span>{trashCount > 0 && <small>{trashCount}</small>}</button>
+      <button className={'nav-item ' + (active === 'activity' ? 'active' : '')} onClick={() => onView('activity')} title="改动记录"><History size={17} /><span>改动记录</span></button>
       <button className="nav-item" onClick={onData} title="备份与导出"><HardDrive size={17} /><span>备份与导出</span></button>
       <UpdatePanel onNotice={onNotice} onError={onError} />
       <div className="local-status"><span />本地保存 · 离线可用</div>

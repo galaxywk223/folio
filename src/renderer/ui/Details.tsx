@@ -1,11 +1,12 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-import { ArchiveRestore, ArrowLeft, CalendarDays, Check, CheckCircle2, ExternalLink, MoreHorizontal, PencilLine, Trash2 } from 'lucide-react';
+import { ArchiveRestore, ArrowLeft, Bell, CalendarDays, CalendarOff, Check, CheckCircle2, Clock, ExternalLink, MapPin, MoreHorizontal, PencilLine, Repeat2, Trash2 } from 'lucide-react';
 import { getSteps } from '../../shared/markdown';
+import { reminderLabel, repeatLabel, timeRange, weekdayLabel } from '../../shared/schedule';
 import { autoRenewLabel } from '../../shared/subscriptions';
 import { dateTime, openExternal } from '../api';
 import { Markdown } from '../components';
 import { expiryClass, expiryLabel } from '../format';
-import type { ApiQuota, Item, Subscription, Task } from '../types';
+import type { ApiQuota, EventItem, Item, Subscription, Task } from '../types';
 
 export function DetailToolbar({ caption, onClose, onEdit, onDelete }: { caption: string; onClose: () => void; onEdit?: () => void; onDelete?: () => void }) {
   return <div className="detail-toolbar">
@@ -83,6 +84,34 @@ export function SubscriptionDetail({ sub, categoryName, onClose, onEdit, onDelet
         ['自动续费', autoRenewLabel(sub.autoRenew)], ['备注', sub.note],
       ]} />
       <EntryButton url={sub.entryUrl} />
+    </div>
+  </div>;
+}
+
+export function EventDetail({ event, date, busy, onClose, onEdit, onDelete, onSkip }: {
+  event: EventItem; date?: string; busy: boolean; onClose: () => void; onEdit: () => void; onDelete: () => void; onSkip?: () => void;
+}) {
+  const shownDate = date || event.date;
+  return <div className="detail-layout">
+    <DetailToolbar caption="日程" onClose={onClose} onEdit={onEdit} onDelete={onDelete} />
+    <div className="detail-scroll">
+      <h2 className="detail-title">{event.title}</h2>
+      <div className="detail-meta">
+        <span className="badge accent"><CalendarDays size={13} />{shownDate} {weekdayLabel(shownDate)}</span>
+        <span className="badge"><Clock size={13} />{timeRange(event)}</span>
+        {event.location && <span className="badge"><MapPin size={13} />{event.location}</span>}
+      </div>
+      <PropertyList rows={[
+        ['重复', repeatLabel(event)],
+        ['提醒', reminderLabel(event.reminderMinutes)],
+        ['已跳过', event.skippedDates.join('、')],
+        ['备注', event.note],
+      ]} />
+      <div className="callout">{event.reminderMinutes === null ? <CalendarDays size={18} /> : <Bell size={18} />}<p>{event.reminderMinutes === null ? '这条日程不会弹出提醒。' : '到时间会弹出 Windows 通知，Folio 在托盘运行即可。'}</p></div>
+    </div>
+    <div className="detail-footer">
+      <span className="muted">{event.repeat !== 'none' && <><Repeat2 size={13} /> 重复日程</>}</span>
+      {onSkip && <button className="button secondary" disabled={busy} onClick={onSkip}><CalendarOff size={16} />跳过这一次</button>}
     </div>
   </div>;
 }

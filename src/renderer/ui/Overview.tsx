@@ -27,6 +27,15 @@ export function QuotaOverview({ items }: { items: ApiQuota[] }) {
   ]} />;
 }
 
+export function TodayOverview({ events, tasks, overdue, subscriptions }: { events: number; tasks: number; overdue: number; subscriptions: number }) {
+  return <Stats stats={[
+    { label: '今天的日程', value: events, tone: events ? 'accent' : undefined },
+    { label: '到期待办', value: tasks },
+    { label: '已逾期', value: overdue, tone: overdue ? 'danger' : undefined },
+    { label: '7 天内到期订阅', value: subscriptions, tone: subscriptions ? 'warning' : undefined },
+  ]} />;
+}
+
 function Stats({ stats }: { stats: Stat[] }) {
   return <div className="overview" role="group" aria-label="概览">
     {stats.map(stat => <div className={'stat' + (stat.tone ? ' ' + stat.tone : '')} key={stat.label}>

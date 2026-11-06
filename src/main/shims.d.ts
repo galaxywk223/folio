@@ -9,7 +9,7 @@ declare module '../server/server.mjs' {
     },
   ): Promise<{
     server: unknown
-    store: unknown
+    store: import('./reminders').ReminderStore
     port: number
     close: () => void
   }>

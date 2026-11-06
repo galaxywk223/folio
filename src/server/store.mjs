@@ -5,6 +5,7 @@ import { DatabaseSync, backup } from 'node:sqlite';
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
 import { parseTasks, parseNotes, getSteps, toggleStep, compareTasks } from '../shared/markdown.js';
 import { isServiceCategory, autoRenewLabel } from '../shared/subscriptions.js';
+import { REPEATS, REMINDER_OPTIONS, occursOn, repeatLabel, reminderLabel, timeRange } from '../shared/schedule.js';
 
 export class AppError extends Error {
   constructor(message, status = 400, code = 'INVALID_REQUEST') {
@@ -22,10 +23,46 @@ const fileColumns = 'id,filename,storage_path AS storagePath,size,created_at AS 
 const legacyQuotaColumns = 'id,kind,platform,entry_url AS entryUrl,balance,recorded_at AS recordedAt,note,created_at AS createdAt,updated_at AS updatedAt,deleted_at AS deletedAt,version';
 const v4QuotaColumns = legacyQuotaColumns + ',category';
 const quotaColumns = v4QuotaColumns + ',account';
-const SCHEMA_VERSION = 8;
-const quotaColumnsBySchema = { '2': legacyQuotaColumns, '3': legacyQuotaColumns, '4': v4QuotaColumns, '5': quotaColumns, '6': quotaColumns, '7': quotaColumns, '8': quotaColumns };
+const SCHEMA_VERSION = 9;
+const SCHEMA_VERSIONS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
+const quotaColumnsBySchema = { '2': legacyQuotaColumns, '3': legacyQuotaColumns, '4': v4QuotaColumns, '5': quotaColumns, '6': quotaColumns, '7': quotaColumns, '8': quotaColumns, '9': quotaColumns };
 const legacySubColumns = 'id,service,account,plan,benefits,status,cost,expires_at AS expiresAt,entry_url AS entryUrl,note,created_at AS createdAt,updated_at AS updatedAt,deleted_at AS deletedAt,version';
 const subColumns = legacySubColumns + ',category,auto_renew AS autoRenew';
+const eventColumns = 'id,title,date,start_time AS startTime,end_time AS endTime,location,note,repeat_rule AS repeat,repeat_days AS repeatDays,repeat_until AS repeatUntil,skipped_dates AS skippedDates,reminder_minutes AS reminderMinutes,created_at AS createdAt,updated_at AS updatedAt,deleted_at AS deletedAt,version';
+const EVENT_TABLE = `CREATE TABLE IF NOT EXISTS events(
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  date TEXT NOT NULL,
+  start_time TEXT NOT NULL DEFAULT '',
+  end_time TEXT NOT NULL DEFAULT '',
+  location TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  repeat_rule TEXT NOT NULL DEFAULT 'none' CHECK(repeat_rule IN ('none','daily','weekly')),
+  repeat_days TEXT NOT NULL DEFAULT '',
+  repeat_until TEXT NOT NULL DEFAULT '',
+  skipped_dates TEXT NOT NULL DEFAULT '',
+  reminder_minutes INTEGER CHECK(reminder_minutes IS NULL OR reminder_minutes IN (0,10,30,60,90,120)),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT,
+  version INTEGER NOT NULL DEFAULT 1
+);`;
+// 改动记录：每次新建、修改、删除、恢复都留一条，来源区分应用内和命令行。
+const ACTIVITY_TABLE = `CREATE TABLE IF NOT EXISTS activity_log(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  source TEXT NOT NULL,
+  action TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  before_json TEXT,
+  after_json TEXT
+);`;
+const ACTIVITY_LIMIT = 2000;
+const activityColumns = 'id,at,source,action,kind,item_id AS itemId,title,before_json AS beforeJson,after_json AS afterJson';
+const ENTITY_TABLES = { task: 'tasks', note: 'notes', attachment: 'attachments', quota: 'api_quotas', subscription: 'subscriptions', event: 'events' };
+const ENTITY_LABELS = { task: '事项', note: '记录', attachment: '附件', quota: '额度记录', subscription: '订阅', event: '日程' };
 
 const DEFAULT_SUBSCRIPTION_CATEGORIES = [
   ['ai', 'AI'], ['development', '云服务'], ['network', '网络'],
@@ -171,6 +208,75 @@ export function extractQuotaAccount(note) {
 function readSubscription(row) {
   return { ...row, autoRenew: row.autoRenew === null ? null : row.autoRenew === 1 };
 }
+const splitList = text => text ? text.split(',') : [];
+function readEvent(row) {
+  return { ...row, repeatDays: splitList(row.repeatDays).map(Number), skippedDates: splitList(row.skippedDates) };
+}
+function optionalTime(value, field) {
+  const text = stringValue(value ?? '', field, 10).trim();
+  if (!text) return '';
+  const match = text.match(/^(\d{1,2})[:：](\d{2})$/);
+  if (!match || Number(match[1]) > 23 || Number(match[2]) > 59) throw new AppError(field + '应为 HH:MM，例如 19:00。');
+  return match[1].padStart(2, '0') + ':' + match[2];
+}
+function requiredDate(value, field) {
+  const text = optionalIsoDate(value, field);
+  if (!text) throw new AppError(field + '不能为空，格式为 YYYY-MM-DD。');
+  return text;
+}
+// 星期可以写成 [5,6]、"5,6"；0 表示周日。
+function weekdayList(value) {
+  const parts = Array.isArray(value) ? value : stringValue(value ?? '', '重复星期', 40).split(/[,，\s]+/).filter(Boolean);
+  const days = parts.map(part => typeof part === 'number' ? part : /^\d$/.test(String(part)) ? Number(part) : NaN);
+  if (days.some(day => !Number.isInteger(day) || day < 0 || day > 6)) throw new AppError('重复星期应为 0–6 的数字列表（0 是周日），例如 [5,6]。');
+  return [...new Set(days)].sort((a, b) => a - b);
+}
+function dateList(value) {
+  const parts = Array.isArray(value) ? value : stringValue(value ?? '', '跳过日期', 20_000).split(/[,，\s]+/).filter(Boolean);
+  return [...new Set(parts.map(part => requiredDate(part, '跳过日期')))].sort();
+}
+function reminderValue(value) {
+  if (value === null || value === '' || value === undefined) return null;
+  const minutes = typeof value === 'string' && /^\d+$/.test(value.trim()) ? Number(value) : value;
+  if (!REMINDER_OPTIONS.includes(minutes)) throw new AppError('提醒应为 null（不提醒）或提前分钟数：' + REMINDER_OPTIONS.join('、') + '。');
+  return minutes;
+}
+// 合并输入与当前值并校验；省略的字段保留原值。
+function eventFields(input, current) {
+  const pick = key => input[key] === undefined ? current[key] : input[key];
+  const title = stringValue(pick('title') ?? '', '标题', 200).trim();
+  if (!title) throw new AppError('日程标题不能为空。');
+  const date = requiredDate(pick('date'), '日期');
+  const startTime = optionalTime(pick('startTime'), '开始时间');
+  const endTime = optionalTime(pick('endTime'), '结束时间');
+  if (endTime && !startTime) throw new AppError('填写结束时间前需要先填写开始时间。');
+  if (endTime && endTime <= startTime) throw new AppError('结束时间应晚于开始时间。');
+  const repeat = pick('repeat') ?? 'none';
+  if (!REPEATS.includes(repeat)) throw new AppError('重复应为 none（不重复）、daily（每天）或 weekly（每周）。');
+  const repeatDays = repeat === 'weekly' ? weekdayList(pick('repeatDays') ?? []) : [];
+  const repeatUntil = repeat === 'none' ? '' : optionalIsoDate(pick('repeatUntil') ?? '', '重复截止');
+  if (repeatUntil && repeatUntil < date) throw new AppError('重复截止不能早于日期。');
+  const skippedDates = repeat === 'none' ? [] : dateList(pick('skippedDates') ?? []);
+  const reminderMinutes = reminderValue(pick('reminderMinutes'));
+  if (reminderMinutes !== null && !startTime) throw new AppError('设置提醒需要先填写开始时间。');
+  return {
+    title, date, startTime, endTime, repeat, repeatDays, repeatUntil, skippedDates, reminderMinutes,
+    location: stringValue(pick('location') ?? '', '地点', 300).trim(),
+    note: stringValue(pick('note') ?? '', '备注', 5000),
+  };
+}
+const emptyEvent = { title: '', date: '', startTime: '', endTime: '', location: '', note: '', repeat: 'none', repeatDays: [], repeatUntil: '', skippedDates: [], reminderMinutes: null };
+const sourceValue = value => typeof value === 'string' && /^[a-z][\w-]{0,30}$/i.test(value) ? value.toLowerCase() : 'app';
+function titleOf(kind, record) {
+  if (!record) return '';
+  return kind === 'quota' ? record.platform : kind === 'subscription' ? record.service : kind === 'attachment' ? record.filename : record.title;
+}
+function compareEvents(a, b) {
+  return a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime) || a.title.localeCompare(b.title);
+}
+
+const WRITE_METHODS = ['insertTask', 'updateTask', 'toggleTaskStep', 'insertNote', 'updateNote', 'insertQuota', 'updateQuota',
+  'insertSubscription', 'updateSubscription', 'insertEvent', 'updateEvent', 'skipEventOccurrence', 'deleteEntity', 'restoreEntity'];
 
 export class Store {
   constructor(root) {
@@ -180,6 +286,9 @@ export class Store {
     this.backupDir = path.join(this.root, '备份');
     this.exportDir = path.join(this.root, '导出');
     this.dbPath = path.join(this.dataDir, 'folio.sqlite');
+    this.source = 'app';
+    this.logging = true;
+    this.openCount = 0;
     for (const directory of [this.dataDir, this.attachmentDir]) fs.mkdirSync(directory, { recursive: true });
     this.migrateLegacyDbName();
     const existing = fs.existsSync(this.dbPath);
@@ -192,7 +301,7 @@ export class Store {
         'CREATE TABLE notes(id TEXT PRIMARY KEY,title TEXT NOT NULL,body_markdown TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,deleted_at TEXT,version INTEGER NOT NULL DEFAULT 1);' +
         'CREATE TABLE attachments(id TEXT PRIMARY KEY,filename TEXT NOT NULL,storage_path TEXT UNIQUE NOT NULL,size INTEGER NOT NULL,created_at TEXT NOT NULL,deleted_at TEXT);' +
         'CREATE TABLE attachment_links(attachment_id TEXT NOT NULL REFERENCES attachments(id),owner_type TEXT NOT NULL CHECK(owner_type IN (\'task\',\'note\')),owner_id TEXT NOT NULL,PRIMARY KEY(attachment_id,owner_type,owner_id));' +
-        SERVICE_TABLES +
+        SERVICE_TABLES + EVENT_TABLE + ACTIVITY_TABLE +
         "INSERT INTO settings VALUES('schema_version','" + SCHEMA_VERSION + "');"
       );
       this.seedCategories('subscription');
@@ -207,10 +316,13 @@ export class Store {
   ensureSchema() {
     const version = this.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get();
     if (version?.value === String(SCHEMA_VERSION)) return;
-    if (!['1', '2', '3', '4', '5', '6', '7'].includes(version?.value)) throw new Error('数据库版本不受支持，原数据已保留。');
+    if (!SCHEMA_VERSIONS.slice(0, -1).includes(version?.value)) throw new Error('数据库版本不受支持，原数据已保留。');
     this.transaction(() => {
       // v1 没有服务表，直接按最新结构建表；v2–v6 逐级补列，已有记录归为 AI，账号从备注迁出，分类改为可管理。
-      if (version.value === '1') {
+      // v8 及更早都没有日程和改动记录，最后统一建表。
+      if (version.value === '8') {
+        // 只需要新增日程和改动记录。
+      } else if (version.value === '1') {
         this.db.exec(SERVICE_TABLES);
         this.seedCategories('subscription');
         this.seedCategories('quota');
@@ -242,6 +354,7 @@ export class Store {
           'DROP TABLE subscriptions_legacy;');
         this.rebuildQuotaTable();
       }
+      this.db.exec(EVENT_TABLE + ACTIVITY_TABLE);
       this.db.prepare("UPDATE settings SET value=? WHERE key='schema_version'").run(String(SCHEMA_VERSION));
     });
   }
@@ -288,12 +401,15 @@ export class Store {
       return this.categories(scope);
     });
   }
+  // 分类可以写 id，也可以写分类名（不区分大小写），方便命令行和智能体直接写「AI」「云服务」。
   categoryId(scope, id) {
     const { table, label } = CATEGORY_SCOPES[scope];
-    if (typeof id !== 'string' || !this.db.prepare('SELECT id FROM ' + table + ' WHERE id=?').get(id)) {
-      throw new AppError(label + '分类不存在。');
+    if (typeof id === 'string') {
+      if (this.db.prepare('SELECT id FROM ' + table + ' WHERE id=?').get(id)) return id;
+      const byName = this.categories(scope).find(row => row.name.toLowerCase() === id.trim().toLowerCase());
+      if (byName) return byName.id;
     }
-    return id;
+    throw new AppError(label + '分类不存在。可用分类：' + this.categories(scope).map(row => row.name).join('、') + '。');
   }
   saveCategory(scope, input, id = crypto.randomUUID(), creating = true) {
     const { table } = CATEGORY_SCOPES[scope];
@@ -339,15 +455,54 @@ export class Store {
   }
   openDatabase() {
     this.db = new DatabaseSync(this.dbPath);
+    this.openCount += 1;
     this.db.exec('PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA busy_timeout=3000;');
     const integrity = this.db.prepare('PRAGMA integrity_check').get();
     if (integrity.integrity_check !== 'ok') throw new Error('数据库完整性检查失败，原数据已保留。');
   }
   close() { this.db.close(); }
   transaction(work) {
+    if (this.inTransaction) return work();
     this.db.exec('BEGIN IMMEDIATE');
+    this.inTransaction = true;
     try { const result = work(); this.db.exec('COMMIT'); return result; }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    finally { this.inTransaction = false; }
+  }
+  // 以指定来源执行一次写入（server 按请求头传入），用于改动记录。
+  as(source, work) {
+    const previous = this.source;
+    this.source = sourceValue(source);
+    try { return work(); } finally { this.source = previous; }
+  }
+  // 每次写入都会改变；重新打开数据库（恢复备份）时也会改变。渲染端据此发现外部改动。
+  revision() {
+    return this.openCount + '-' + this.db.prepare('SELECT total_changes() AS total').get().total;
+  }
+  record(action, kind, before, after) {
+    if (!this.logging) return;
+    const item = after || before;
+    this.db.prepare('INSERT INTO activity_log(at,source,action,kind,item_id,title,before_json,after_json) VALUES(?,?,?,?,?,?,?,?)')
+      .run(now(), this.source, action, kind, item.id, titleOf(kind, item), before ? JSON.stringify(before) : null, after ? JSON.stringify(after) : null);
+    this.db.prepare('DELETE FROM activity_log WHERE id <= (SELECT MAX(id) FROM activity_log) - ?').run(ACTIVITY_LIMIT);
+  }
+  activity(input = {}) {
+    const limit = Math.min(Math.max(Number.parseInt(input.limit ?? 50, 10) || 50, 1), ACTIVITY_LIMIT);
+    const kind = typeof input.kind === 'string' && input.kind ? input.kind : null;
+    if (kind && !ENTITY_TABLES[kind]) throw new AppError('类型应为 task、event、quota 或 subscription。');
+    const rows = this.db.prepare('SELECT ' + activityColumns + ' FROM activity_log' + (kind ? ' WHERE kind=?' : '') + ' ORDER BY id DESC LIMIT ?')
+      .all(...(kind ? [kind, limit] : [limit]));
+    return rows.map(({ beforeJson, afterJson, ...row }) => ({ ...row, before: beforeJson ? JSON.parse(beforeJson) : null, after: afterJson ? JSON.parse(afterJson) : null }));
+  }
+  // 路由里的 id 可以写完整 id，也可以写唯一前缀（至少 6 位）。
+  resolveId(kind, id) {
+    const table = ENTITY_TABLES[kind];
+    if (typeof id !== 'string' || !id) return id;
+    if (this.db.prepare('SELECT id FROM ' + table + ' WHERE id=?').get(id)) return id;
+    if (id.length < 6 || !/^[\w-]+$/.test(id)) return id;
+    const matches = this.db.prepare('SELECT id FROM ' + table + ' WHERE substr(id,1,?)=? LIMIT 6').all(id.length, id);
+    if (matches.length > 1) throw new AppError('id 前缀「' + id + '」匹配到多条' + ENTITY_LABELS[kind] + '，请写完整 id：' + matches.map(row => row.id).join('、'), 409, 'AMBIGUOUS_ID');
+    return matches[0]?.id ?? id;
   }
   bootstrapSources() {
     const taskPath = path.join(this.root, '待办.md');
@@ -369,7 +524,8 @@ export class Store {
     const metadata = { tasks: tasks.length, steps: tasks.reduce((sum, task) => sum + getSteps(task.bodyMarkdown).length, 0), notes: notes.length, attachments: files.length, sourceHashes: { '待办.md': hash(taskBytes), '随手记.md': hash(noteBytes) } };
     fs.writeFileSync(path.join(snapshot, 'manifest.json'), JSON.stringify(metadata, null, 2), { flag: 'wx' });
     this.transaction(() => {
-      tasks.forEach(task => this.insertTask(task));
+      this.logging = false;
+      try { tasks.forEach(task => this.insertTask(task)); } finally { this.logging = true; }
       notes.forEach(note => this.insertNote(note));
       for (const file of files) {
         this.db.prepare('INSERT INTO attachments(id,filename,storage_path,size,created_at) VALUES(?,?,?,?,?)').run(crypto.randomUUID(), path.basename(file.relative), file.relative, fs.statSync(file.absolute).size, now());
@@ -379,29 +535,40 @@ export class Store {
     });
   }
   task(id, includeDeleted = false) {
+    id = this.resolveId('task', id);
     const task = this.db.prepare('SELECT ' + taskColumns + ' FROM tasks WHERE id=?' + (includeDeleted ? '' : ' AND deleted_at IS NULL')).get(id);
     if (!task) throw new AppError('事项不存在或已移入回收站。', 404, 'NOT_FOUND');
     return task;
   }
   note(id, includeDeleted = false) {
+    id = this.resolveId('note', id);
     const note = this.db.prepare('SELECT ' + noteColumns + ' FROM notes WHERE id=?' + (includeDeleted ? '' : ' AND deleted_at IS NULL')).get(id);
     if (!note) throw new AppError('记录不存在或已移入回收站。', 404, 'NOT_FOUND');
     return note;
   }
   file(id, includeDeleted = false) {
+    id = this.resolveId('attachment', id);
     const file = this.db.prepare('SELECT ' + fileColumns + ' FROM attachments WHERE id=?' + (includeDeleted ? '' : ' AND deleted_at IS NULL')).get(id);
     if (!file) throw new AppError('附件不存在或已移入回收站。', 404, 'NOT_FOUND');
     return file;
   }
   quota(id, includeDeleted = false) {
+    id = this.resolveId('quota', id);
     const row = this.db.prepare('SELECT ' + quotaColumns + ' FROM api_quotas WHERE id=?' + (includeDeleted ? '' : ' AND deleted_at IS NULL')).get(id);
     if (!row) throw new AppError('额度记录不存在或已移入回收站。', 404, 'NOT_FOUND');
     return row;
   }
   subscription(id, includeDeleted = false) {
+    id = this.resolveId('subscription', id);
     const row = this.db.prepare('SELECT ' + subColumns + ' FROM subscriptions WHERE id=?' + (includeDeleted ? '' : ' AND deleted_at IS NULL')).get(id);
     if (!row) throw new AppError('订阅不存在或已移入回收站。', 404, 'NOT_FOUND');
     return readSubscription(row);
+  }
+  event(id, includeDeleted = false) {
+    id = this.resolveId('event', id);
+    const row = this.db.prepare('SELECT ' + eventColumns + ' FROM events WHERE id=?' + (includeDeleted ? '' : ' AND deleted_at IS NULL')).get(id);
+    if (!row) throw new AppError('日程不存在或已移入回收站。', 404, 'NOT_FOUND');
+    return readEvent(row);
   }
   state() {
     return {
@@ -413,13 +580,16 @@ export class Store {
       quotaCategories: this.quotaCategories(),
       subscriptionCategories: this.subscriptionCategories(),
       subscriptions: this.db.prepare('SELECT ' + subColumns + ' FROM subscriptions').all().map(readSubscription).sort(compareSubscriptions),
+      events: this.db.prepare('SELECT ' + eventColumns + ' FROM events').all().map(readEvent).sort(compareEvents),
       migration: (() => {
         const row = this.db.prepare("SELECT value FROM settings WHERE key='migration_metadata'").get();
         return row ? JSON.parse(row.value) : null;
       })(),
     };
   }
+  // 不带 version 时直接写入（命令行、智能体）；带了就必须和当前一致，界面靠它防止覆盖。
   checkVersion(record, version) {
+    if (version === undefined || version === null) return;
     if (version !== record.version) throw new AppError('内容已在其他窗口更新。当前草稿仍保留，请重新载入后核对修改。', 409, 'VERSION_CONFLICT');
   }
   insertTask(input) {
@@ -433,10 +603,13 @@ export class Store {
     const status = input.status === 'completed' ? 'completed' : 'pending';
     this.db.prepare('INSERT INTO tasks(id,title,date_text,body_markdown,status,sort_order,completed_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)')
       .run(id, title, dateText, body, status, order, status === 'completed' ? timestamp : null, timestamp, timestamp);
-    return this.task(id);
+    const record = this.task(id);
+    this.record('create', 'task', null, record);
+    return record;
   }
   updateTask(id, input) {
     const current = this.task(id);
+    id = current.id;
     this.checkVersion(current, input.version);
     const title = stringValue(input.title ?? current.title, '标题', 500).trim();
     if (!title) throw new AppError('事项标题不能为空。');
@@ -450,10 +623,13 @@ export class Store {
     const completedAt = status === 'completed' ? current.completedAt || now() : null;
     this.db.prepare('UPDATE tasks SET title=?,date_text=?,body_markdown=?,status=?,completed_at=?,updated_at=?,version=version+1 WHERE id=?')
       .run(title, dateText, body, status, completedAt, now(), id);
-    return this.task(id);
+    const record = this.task(id);
+    this.record('update', 'task', current, record);
+    return record;
   }
   toggleTaskStep(id, input) {
     const current = this.task(id);
+    id = current.id;
     this.checkVersion(current, input.version);
     if (!Number.isInteger(input.index) || typeof input.checked !== 'boolean') throw new AppError('检查步骤参数无效。');
     let body;
@@ -467,15 +643,20 @@ export class Store {
     const id = crypto.randomUUID();
     const timestamp = now();
     this.db.prepare('INSERT INTO notes(id,title,body_markdown,created_at,updated_at) VALUES(?,?,?,?,?)').run(id, title, body, timestamp, timestamp);
-    return this.note(id);
+    const record = this.note(id);
+    this.record('create', 'note', null, record);
+    return record;
   }
   updateNote(id, input) {
     const current = this.note(id);
+    id = current.id;
     this.checkVersion(current, input.version);
     const title = stringValue(input.title ?? current.title, '标题', 500).trim() || '无标题';
     const body = stringValue(input.bodyMarkdown ?? current.bodyMarkdown, '正文');
     this.db.prepare('UPDATE notes SET title=?,body_markdown=?,updated_at=?,version=version+1 WHERE id=?').run(title, body, now(), id);
-    return this.note(id);
+    const record = this.note(id);
+    this.record('update', 'note', current, record);
+    return record;
   }
   insertQuota(input) {
     const kind = stringValue(input.kind ?? '官方', '类型', 20).trim();
@@ -492,10 +673,13 @@ export class Store {
     const timestamp = now();
     this.db.prepare('INSERT INTO api_quotas(id,kind,category,platform,account,entry_url,balance,recorded_at,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
       .run(id, kind, category, platform, account, entryUrl, balance, recordedAt, note, timestamp, timestamp);
-    return this.quota(id);
+    const record = this.quota(id);
+    this.record('create', 'quota', null, record);
+    return record;
   }
   updateQuota(id, input) {
     const current = this.quota(id);
+    id = current.id;
     this.checkVersion(current, input.version);
     const kind = stringValue(input.kind ?? current.kind, '类型', 20).trim();
     if (!['官方', '中转'].includes(kind)) throw new AppError('额度类型应为「官方」或「中转」。');
@@ -510,7 +694,9 @@ export class Store {
     const note = stringValue(input.note ?? current.note, '备注', 5000);
     this.db.prepare('UPDATE api_quotas SET kind=?,category=?,platform=?,account=?,entry_url=?,balance=?,recorded_at=?,note=?,updated_at=?,version=version+1 WHERE id=?')
       .run(kind, category, platform, account, entryUrl, balance, recordedAt, note, now(), id);
-    return this.quota(id);
+    const record = this.quota(id);
+    this.record('update', 'quota', current, record);
+    return record;
   }
   insertSubscription(input) {
     const service = stringValue(input.service ?? '', '服务', 200).trim();
@@ -529,10 +715,13 @@ export class Store {
     const timestamp = now();
     this.db.prepare('INSERT INTO subscriptions(id,service,category,auto_renew,account,plan,benefits,status,cost,expires_at,entry_url,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
       .run(id, service, category, autoRenew, account, plan, benefits, status, cost, expiresAt, entryUrl, note, timestamp, timestamp);
-    return this.subscription(id);
+    const record = this.subscription(id);
+    this.record('create', 'subscription', null, record);
+    return record;
   }
   updateSubscription(id, input) {
     const current = this.subscription(id);
+    id = current.id;
     this.checkVersion(current, input.version);
     const category = this.subscriptionCategory(input.category === undefined ? current.category : input.category);
     const autoRenew = autoRenewValue(input.autoRenew === undefined ? current.autoRenew : input.autoRenew);
@@ -548,33 +737,65 @@ export class Store {
     const note = stringValue(input.note ?? current.note, '备注', 5000);
     this.db.prepare('UPDATE subscriptions SET service=?,category=?,auto_renew=?,account=?,plan=?,benefits=?,status=?,cost=?,expires_at=?,entry_url=?,note=?,updated_at=?,version=version+1 WHERE id=?')
       .run(service, category, autoRenew, account, plan, benefits, status, cost, expiresAt, entryUrl, note, now(), id);
-    return this.subscription(id);
+    const record = this.subscription(id);
+    this.record('update', 'subscription', current, record);
+    return record;
+  }
+  insertEvent(input) {
+    const fields = eventFields(input ?? {}, emptyEvent);
+    const id = crypto.randomUUID();
+    const timestamp = now();
+    this.db.prepare('INSERT INTO events(id,title,date,start_time,end_time,location,note,repeat_rule,repeat_days,repeat_until,skipped_dates,reminder_minutes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(id, fields.title, fields.date, fields.startTime, fields.endTime, fields.location, fields.note, fields.repeat, fields.repeatDays.join(','), fields.repeatUntil, fields.skippedDates.join(','), fields.reminderMinutes, timestamp, timestamp);
+    const record = this.event(id);
+    this.record('create', 'event', null, record);
+    return record;
+  }
+  updateEvent(id, input, action = 'update') {
+    const current = this.event(id);
+    id = current.id;
+    this.checkVersion(current, input?.version);
+    const fields = eventFields(input ?? {}, current);
+    this.db.prepare('UPDATE events SET title=?,date=?,start_time=?,end_time=?,location=?,note=?,repeat_rule=?,repeat_days=?,repeat_until=?,skipped_dates=?,reminder_minutes=?,updated_at=?,version=version+1 WHERE id=?')
+      .run(fields.title, fields.date, fields.startTime, fields.endTime, fields.location, fields.note, fields.repeat, fields.repeatDays.join(','), fields.repeatUntil, fields.skippedDates.join(','), fields.reminderMinutes, now(), id);
+    const record = this.event(id);
+    this.record(action, 'event', current, record);
+    return record;
+  }
+  // 重复日程跳过某一天（例如这周家教取消），其余日子不变。
+  skipEventOccurrence(id, input) {
+    const current = this.event(id);
+    this.checkVersion(current, input?.version);
+    const date = requiredDate(input?.date, '跳过日期');
+    if (current.repeat === 'none') throw new AppError('只有重复日程可以跳过某一次；不重复的日程请直接删除。');
+    if (!occursOn(current, date)) throw new AppError(date + ' 这天没有这个日程。');
+    return this.updateEvent(current.id, { skippedDates: [...current.skippedDates, date] }, 'skip');
   }
   deleteEntity(type, id, input = {}) {
-    const table = { task: 'tasks', note: 'notes', attachment: 'attachments', quota: 'api_quotas', subscription: 'subscriptions' }[type];
+    const table = ENTITY_TABLES[type];
     if (!table) throw new AppError('对象类型无效。');
-    const current = type === 'task' ? this.task(id)
-      : type === 'note' ? this.note(id)
-      : type === 'attachment' ? this.file(id)
-      : type === 'quota' ? this.quota(id)
-      : this.subscription(id);
-    if (type !== 'attachment') this.checkVersion(current, input.version);
+    const current = this.entity(type, id);
+    id = current.id;
+    if (type !== 'attachment') this.checkVersion(current, input?.version);
     const hasVersion = type !== 'attachment';
     this.db.prepare('UPDATE ' + table + ' SET deleted_at=?' + (hasVersion ? ',version=version+1,updated_at=?' : '') + ' WHERE id=?')
       .run(...(hasVersion ? [now(), now(), id] : [now(), id]));
+    if (type !== 'attachment') this.record('delete', type, current, null);
+  }
+  entity(type, id, includeDeleted = false) {
+    if (!ENTITY_TABLES[type]) throw new AppError('对象类型无效。');
+    return type === 'attachment' ? this.file(id, includeDeleted) : this[type](id, includeDeleted);
   }
   restoreEntity(type, id) {
-    const table = { task: 'tasks', note: 'notes', attachment: 'attachments', quota: 'api_quotas', subscription: 'subscriptions' }[type];
+    const table = ENTITY_TABLES[type];
     if (!table) throw new AppError('对象类型无效。');
-    const current = type === 'task' ? this.task(id, true)
-      : type === 'note' ? this.note(id, true)
-      : type === 'attachment' ? this.file(id, true)
-      : type === 'quota' ? this.quota(id, true)
-      : this.subscription(id, true);
+    const current = this.entity(type, id, true);
+    id = current.id;
     if (!current.deletedAt) throw new AppError('对象未在回收站中。');
     const hasVersion = type !== 'attachment';
     this.db.prepare('UPDATE ' + table + ' SET deleted_at=NULL' + (hasVersion ? ',version=version+1,updated_at=?' : '') + ' WHERE id=?')
       .run(...(hasVersion ? [now(), id] : [id]));
+    if (type !== 'attachment') this.record('restore', type, null, this.entity(type, id));
   }
   insertFile(filename, bytes, ownerType, ownerId) {
     const cleanName = path.basename(filename.replaceAll('\\', '/')).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '') || '附件';
@@ -644,7 +865,7 @@ export class Store {
     let entries, manifest;
     try { entries = unzipSync(bytes); manifest = JSON.parse(strFromU8(entries['manifest.json'])); }
     catch { throw new AppError('文件不是有效的完整备份。'); }
-    const okFormat = (manifest.format === 'folio-backup' && [2, 3, 4, 5, 6, 7, 8].includes(manifest.schemaVersion))
+    const okFormat = (manifest.format === 'folio-backup' && SCHEMA_VERSIONS.slice(1).map(Number).includes(manifest.schemaVersion))
       || (manifest.format === 'daily-affairs-backup' && manifest.schemaVersion === 1);
     if (!okFormat || !manifest.files || !entries['data.sqlite']) throw new AppError('备份版本或结构不受支持。');
     for (const [name, checksum] of Object.entries(manifest.files)) {
@@ -664,27 +885,33 @@ export class Store {
       validationDb = new DatabaseSync(candidatePath, { readOnly: true });
       if (validationDb.prepare('PRAGMA integrity_check').get().integrity_check !== 'ok') throw new AppError('备份数据库校验失败。');
       const schema = validationDb.prepare("SELECT value FROM settings WHERE key='schema_version'").get()?.value;
-      if (!['1', '2', '3', '4', '5', '6', '7', '8'].includes(schema) || Number(schema) !== manifest.schemaVersion) throw new AppError('备份数据库校验失败。');
+      if (!SCHEMA_VERSIONS.includes(schema) || Number(schema) !== manifest.schemaVersion) throw new AppError('备份数据库校验失败。');
       validationDb.prepare('SELECT ' + taskColumns + ' FROM tasks').all();
       validationDb.prepare('SELECT ' + noteColumns + ' FROM notes').all();
       validationDb.prepare('SELECT * FROM attachment_links').all();
       if (schema !== '1') {
         const quotas = validationDb.prepare('SELECT ' + quotaColumnsBySchema[schema] + ' FROM api_quotas').all();
-        const ordered = schema === '8';
+        const ordered = ['8', '9'].includes(schema);
         const categoryColumns = ordered ? 'id,name,sort_order' : 'id,name';
-        const managedQuotas = ['7', '8'].includes(schema);
+        const managedQuotas = ['7', '8', '9'].includes(schema);
         const quotaCategoryIds = managedQuotas ? validCategories(validationDb.prepare('SELECT ' + categoryColumns + ' FROM quota_categories').all(), ordered) : null;
         if (managedQuotas && !quotaCategoryIds) throw new AppError('备份额度分类校验失败。');
-        if (['4', '5', '6', '7', '8'].includes(schema) && quotas.some(row => !(managedQuotas ? quotaCategoryIds.has(row.category) : isServiceCategory(row.category)))) throw new AppError('备份额度字段校验失败。');
-        if (['5', '6', '7', '8'].includes(schema) && quotas.some(row => typeof row.account !== 'string')) throw new AppError('备份额度字段校验失败。');
+        if (['4', '5', '6', '7', '8', '9'].includes(schema) && quotas.some(row => !(managedQuotas ? quotaCategoryIds.has(row.category) : isServiceCategory(row.category)))) throw new AppError('备份额度字段校验失败。');
+        if (['5', '6', '7', '8', '9'].includes(schema) && quotas.some(row => typeof row.account !== 'string')) throw new AppError('备份额度字段校验失败。');
         const subscriptions = validationDb.prepare('SELECT ' + (schema === '2' ? legacySubColumns : subColumns) + ' FROM subscriptions').all();
-        const managed = ['6', '7', '8'].includes(schema);
+        const managed = ['6', '7', '8', '9'].includes(schema);
         const categoryIds = managed ? validCategories(validationDb.prepare('SELECT ' + categoryColumns + ' FROM subscription_categories').all(), ordered) : null;
         if (managed && !categoryIds) throw new AppError('备份订阅分类校验失败。');
         if (schema !== '2' && subscriptions.some(row =>
           !(managed ? categoryIds.has(row.category) : isServiceCategory(row.category)) || ![null, 0, 1].includes(row.autoRenew))) {
           throw new AppError('备份订阅字段校验失败。');
         }
+      }
+      if (schema === '9') {
+        const events = validationDb.prepare('SELECT ' + eventColumns + ' FROM events').all();
+        if (events.some(row => typeof row.title !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(row.date) || !REPEATS.includes(row.repeat) ||
+          !(row.reminderMinutes === null || REMINDER_OPTIONS.includes(row.reminderMinutes)))) throw new AppError('备份日程字段校验失败。');
+        validationDb.prepare('SELECT ' + activityColumns + ' FROM activity_log').all();
       }
       for (const file of validationDb.prepare('SELECT ' + fileColumns + ' FROM attachments').all()) {
         const relative = safeRelative(file.storagePath);
@@ -746,12 +973,14 @@ export class Store {
     const quotas = state.quotas.filter(item => !item.deletedAt).map(item => `| ${markdownCell(quotaCategoryNames.get(item.category))} | ${item.kind} | ${item.platform} | ${item.account || '—'} | ${item.entryUrl || '—'} | ${item.balance || '—'} | ${item.recordedAt || '—'} | ${item.note || '—'} |`).join('\n');
     const categoryNames = new Map(state.subscriptionCategories.map(({ id, name }) => [id, name]));
     const subscriptions = state.subscriptions.filter(item => !item.deletedAt).map(item => `| ${markdownCell(categoryNames.get(item.category))} | ${item.service} | ${item.account || '—'} | ${item.plan || '—'} | ${item.benefits || '—'} | ${item.status || '—'} | ${item.cost || '—'} | ${item.expiresAt || '—'} | ${autoRenewLabel(item.autoRenew)} | ${item.note || '—'} |`).join('\n');
+    const events = state.events.filter(item => !item.deletedAt).map(item => `| ${item.date} | ${timeRange(item)} | ${markdownCell(item.title)} | ${markdownCell(item.location) || '—'} | ${repeatLabel(item)} | ${reminderLabel(item.reminderMinutes)} | ${markdownCell(item.note) || '—'} |`).join('\n');
     const id = stamp();
     const directory = path.join(this.exportDir, id);
     fs.mkdirSync(directory, { recursive: true });
     const entries = {
       '待办.md': strToU8(('# 待办\n\n## 待处理\n\n' + pending + '\n\n## 已完成\n\n' + completed + '\n').replace(/\r?\n/g, '\r\n')),
       '随手记.md': strToU8(('# 随手记\n\n## 随手记录\n\n' + notes + '\n').replace(/\r?\n/g, '\r\n')),
+      '日程.md': strToU8(('# 日程\n\n| 日期 | 时间 | 标题 | 地点 | 重复 | 提醒 | 备注 |\n|---|---|---|---|---|---|---|\n' + (events || '| — | — | — | — | — | — | — |') + '\n').replace(/\r?\n/g, '\r\n')),
       '服务与订阅.md': strToU8(('# 服务与订阅记录\n\n## 额度\n\n| 分类 | 类型 | 平台 | 账号 | 入口 | 余额 | 记录 | 备注 |\n|---|---|---|---|---|---|---|---|\n' + (quotas || '| — | — | — | — | — | — | — | — |') + '\n\n## 订阅\n\n| 分类 | 服务 | 账号 | 套餐 | 权益 | 状态 | 费用 | 到期 | 续费 | 备注 |\n|---|---|---|---|---|---|---|---|---|---|\n' + (subscriptions || '| — | — | — | — | — | — | — | — | — | — |') + '\n').replace(/\r?\n/g, '\r\n')),
     };
     for (const file of files) entries['附件/' + file.storagePath] = new Uint8Array(fs.readFileSync(inside(this.attachmentDir, file.storagePath)));
@@ -764,9 +993,13 @@ export class Store {
     return { id, directory: '导出/' + id, downloadUrl: '/api/exports/' + id + '/' + encodeURIComponent('Folio导出.zip') };
   }
   exportPath(id, filename) {
-    if (!/^[\w-]+$/.test(id) || !['待办.md', '随手记.md', '服务与订阅.md', 'Folio导出.zip', '日常事务导出.zip'].includes(filename)) throw new AppError('导出文件路径无效。');
+    if (!/^[\w-]+$/.test(id) || !['待办.md', '随手记.md', '日程.md', '服务与订阅.md', 'Folio导出.zip', '日常事务导出.zip'].includes(filename)) throw new AppError('导出文件路径无效。');
     const target = inside(this.exportDir, id + '/' + filename);
     if (!fs.existsSync(target)) throw new AppError('导出文件不存在。', 404);
     return target;
   }
+}
+for (const name of WRITE_METHODS) {
+  const write = Store.prototype[name];
+  Store.prototype[name] = function (...args) { return this.transaction(() => write.apply(this, args)); };
 }

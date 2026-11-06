@@ -1,6 +1,6 @@
 {
   "name": "folio",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "private": false,
   "description": "Folio — local desk for tasks, quotas and subscriptions",
   "keywords": [
@@ -33,13 +33,14 @@
   },
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "npm run typecheck && electron-vite build",
+    "build": "npm run typecheck && electron-vite build && node scripts/build-cli.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "test": "node --test scripts/subscriptions.test.mjs",
+    "test": "node --test scripts/subscriptions.test.mjs scripts/schedule.test.mjs scripts/cli.test.mjs",
     "dist": "npm run build && electron-builder --win nsis --x64 --publish never",
     "dist:publish": "npm run build && electron-builder --win nsis --x64 --publish always",
     "icon": "node scripts/generate-icon.mjs",
-    "preview": "electron-vite preview"
+    "preview": "electron-vite preview",
+    "cli": "node scripts/build-cli.mjs && node out/cli/folio.cjs"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.15",
@@ -63,6 +64,7 @@
     "electron": "^43.2.0",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
+    "esbuild": "^0.25.12",
     "pngjs": "^7.0.0",
     "typescript": "^5.9.0",
     "vite": "^7.1.0"
@@ -78,6 +80,7 @@
     },
     "files": [
       "out/**/*",
+      "!out/cli/**",
       "package.json"
     ],
     "win": {
@@ -97,13 +100,28 @@
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "include": "assets/installer.nsh"
     },
     "publish": [
       {
         "provider": "github",
         "owner": "galaxywk223",
         "repo": "folio"
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "out/cli/folio.cjs",
+        "to": "bin/folio.cjs"
+      },
+      {
+        "from": "assets/bin/folio.cmd",
+        "to": "bin/folio.cmd"
+      },
+      {
+        "from": "assets/bin/remove-path.ps1",
+        "to": "bin/remove-path.ps1"
       }
     ]
   }

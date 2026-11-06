@@ -9,6 +9,7 @@ export type FolioBridge = {
   checkForUpdates: () => Promise<UpdateStatus>
   installUpdate: () => Promise<{ started: boolean }>
   onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void
+  onNavigate: (callback: (target: { kind: 'event' | 'subscription'; id: string; date?: string }) => void) => () => void
 }
 
 const bridge: FolioBridge = {
@@ -22,6 +23,11 @@ const bridge: FolioBridge = {
     const listener = (_event: Electron.IpcRendererEvent, status: UpdateStatus) => callback(status)
     ipcRenderer.on('folio:update-status', listener)
     return () => ipcRenderer.removeListener('folio:update-status', listener)
+  },
+  onNavigate: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, target: Parameters<typeof callback>[0]) => callback(target)
+    ipcRenderer.on('folio:navigate', listener)
+    return () => ipcRenderer.removeListener('folio:navigate', listener)
   },
 }
 
