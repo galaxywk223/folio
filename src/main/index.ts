@@ -18,8 +18,10 @@ const dataRoot = process.env.FOLIO_DATA_DIR
 
 // 开发运行用单独的目录，不会和已安装的 Folio 抢单实例锁。
 app.setPath('userData', join(localAppData, app.isPackaged ? 'FolioApp' : 'FolioApp-dev'))
-// 与 build.appId 一致，Windows 通知才会显示 Folio 的名称和图标。
-app.setAppUserModelId('com.galaxywk.folio')
+// 与 build.appId 一致，Windows 通知和任务栏才会显示 Folio 的名称和图标。
+// 开发运行用另一个 id：否则 Windows 会把 electron.exe 的图标记到安装版的 id 上。
+const appUserModelId = app.isPackaged ? 'com.galaxywk.folio' : 'com.galaxywk.folio.dev'
+app.setAppUserModelId(appUserModelId)
 
 let mainWindow: BrowserWindow | null = null
 let closeServer: (() => void) | null = null
@@ -128,6 +130,7 @@ async function showMainWindow(): Promise<void> {
 async function createWindow(visible = true): Promise<BrowserWindow> {
   const window = new BrowserWindow({
     title: 'Folio',
+    icon: nativeImage.createFromPath(trayIconPath),
     width: 1280,
     height: 820,
     minWidth: 960,
@@ -154,6 +157,16 @@ async function createWindow(visible = true): Promise<BrowserWindow> {
       if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
     }
   })
+  if (process.platform === 'win32') {
+    // 把任务栏图标直接写到窗口属性上，不依赖快捷方式和系统的图标缓存。
+    window.setAppDetails({
+      appId: appUserModelId,
+      appIconPath: process.execPath,
+      appIconIndex: 0,
+      relaunchCommand: '"' + process.execPath + '"' + (app.isPackaged ? '' : ' "' + app.getAppPath() + '"'),
+      relaunchDisplayName: 'Folio',
+    })
+  }
   if (visible) window.once('ready-to-show', () => window.show())
   window.on('close', (event) => {
     if (isQuitting) return
