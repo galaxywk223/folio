@@ -1,5 +1,5 @@
-import { CalendarRange, CheckCircle2, Circle, CreditCard, HardDrive, History, Sun, Trash2, Wallet } from 'lucide-react';
-import { UpdatePanel } from './UpdatePanel';
+import { CalendarRange, CheckCircle2, Circle, CreditCard, History, Settings, Sun, Trash2, Wallet } from 'lucide-react';
+import { useUpdateStatus } from './UpdateSection';
 import type { View } from '../types';
 
 type Counts = Record<'today' | 'schedule' | 'pending' | 'completed' | 'quotas' | 'subscriptions', number>;
@@ -17,11 +17,11 @@ const groups = [
   ] },
 ];
 
-export function Sidebar({ active, counts, trashCount, onView, onData, onNotice, onError }: {
-  active: View | null; counts: Counts; trashCount: number;
-  onView: (view: View) => void; onData: () => void;
-  onNotice: (value: string) => void; onError: (value: string) => void;
+export function Sidebar({ active, counts, trashCount, onView }: {
+  active: View | null; counts: Counts; trashCount: number; onView: (view: View) => void;
 }) {
+  const [update] = useUpdateStatus();
+  const updateReady = update?.phase === 'downloaded';
   return <aside className="sidebar card">
     <div className="brand"><span className="brand-mark" aria-hidden="true"><FolioMark /></span><span>Folio</span></div>
     {groups.map(group => <div className="nav-group" key={group.caption}>
@@ -33,8 +33,9 @@ export function Sidebar({ active, counts, trashCount, onView, onData, onNotice, 
     <div className="sidebar-bottom">
       <button className={'nav-item ' + (active === 'trash' ? 'active' : '')} onClick={() => onView('trash')} title="回收站"><Trash2 size={17} /><span>回收站</span>{trashCount > 0 && <small>{trashCount}</small>}</button>
       <button className={'nav-item ' + (active === 'activity' ? 'active' : '')} onClick={() => onView('activity')} title="改动记录"><History size={17} /><span>改动记录</span></button>
-      <button className="nav-item" onClick={onData} title="备份与导出"><HardDrive size={17} /><span>备份与导出</span></button>
-      <UpdatePanel onNotice={onNotice} onError={onError} />
+      <button className={'nav-item ' + (active === 'settings' ? 'active' : '') + (updateReady ? ' highlight' : '')} onClick={() => onView('settings')} title={updateReady ? '设置 · 新版本已下载' : '设置'}>
+        <Settings size={17} /><span>设置</span>{updateReady && update?.available_version && <small>v{update.available_version}</small>}
+      </button>
       <div className="local-status"><span />本地保存 · 离线可用</div>
     </div>
   </aside>;

@@ -10,17 +10,17 @@ import { parseBalance } from './format';
 import type { ApiQuota, Entity, EditorValue, EventDraft, EventItem, Item, Kind, QuotaDraft, Selection, State, Subscription, SubscriptionDraft, Task, View } from './types';
 import { ActivityView } from './ui/ActivityView';
 import { CategoryManager } from './ui/CategoryManager';
-import { DataManager } from './ui/DataManager';
 import { EventDetail, QuotaDetail, SubscriptionDetail, TaskDetail, TrashDetail } from './ui/Details';
 import { EventEditor } from './ui/EventEditor';
 import { ItemList } from './ui/ItemList';
 import { QuotaOverview, SubscriptionOverview, TodayOverview } from './ui/Overview';
 import { ServiceEditor } from './ui/ServiceEditor';
+import { SettingsView } from './ui/SettingsView';
 import { Sidebar } from './ui/Sidebar';
 import { Topbar } from './ui/Topbar';
 
 const viewTitles: Record<View, string> = {
-  today: '今天', schedule: '日程', pending: '待办', completed: '已完成', quotas: '额度', subscriptions: '订阅', trash: '回收站', activity: '改动记录',
+  today: '今天', schedule: '日程', pending: '待办', completed: '已完成', quotas: '额度', subscriptions: '订阅', trash: '回收站', activity: '改动记录', settings: '设置',
 };
 const viewDescriptions: Record<View, string> = {
   today: '今天的日程、到期待办和 7 天内到期的订阅。',
@@ -31,6 +31,7 @@ const viewDescriptions: Record<View, string> = {
   subscriptions: '按到期日排序；14 天内到期会高亮提醒。',
   trash: '恢复已删除的事项与服务条目。',
   activity: '应用内和 folio 命令写入的每一次改动。',
+  settings: '启动、窗口、外观、数据备份与更新。',
 };
 const SCHEDULE_DAYS = 14;
 const SUBSCRIPTION_SOON_DAYS = 7;
@@ -68,7 +69,6 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [wide, setWide] = useState(window.innerWidth >= 1180);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
-  const [dataOpen, setDataOpen] = useState(false);
   const listRef = useRef<HTMLElement>(null);
   const detailRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -155,8 +155,8 @@ export default function App() {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's' && editing?.kind === 'task') {
         event.preventDefault(); void editorRef.current?.save();
       }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && !dataOpen && !confirmation) { event.preventDefault(); searchRef.current?.focus(); }
-      if (event.key === 'Escape' && !wide && drawerOpen && !dataOpen && !confirmation) guarded(() => setDrawerOpen(false));
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && !confirmation) { event.preventDefault(); searchRef.current?.focus(); }
+      if (event.key === 'Escape' && !wide && drawerOpen && !confirmation) guarded(() => setDrawerOpen(false));
     };
     window.addEventListener('keydown', keydown);
     return () => window.removeEventListener('keydown', keydown);
@@ -227,7 +227,7 @@ export default function App() {
     return [];
   }, [state, view, query, today, subscriptionFilter, quotaFilter, categoryNames, quotaCategoryNames]);
   useEffect(() => {
-    if (editing || view === 'activity') return;
+    if (editing || view === 'activity' || view === 'settings') return;
     if (!selection || !items.some(item => sameSelection(item, selection))) {
       setSelection(items[0] ? { kind: items[0].kind, id: items[0].id, date: items[0].date } : null);
     }
@@ -293,6 +293,13 @@ export default function App() {
   openEntityRef.current = openEntity;
   useEffect(() => window.folio?.onNavigate?.(target => openEntityRef.current(target.kind, target.id, target.date)), []);
   const reportError = useCallback((message: string) => setError(message), []);
+
+  function restoreBackup(action: () => Promise<unknown>) {
+    setConfirmation({
+      title: '从完整备份恢复', message: '恢复将替换应用中的事项、日程与服务条目。当前数据会先自动备份。', primary: '备份当前数据并恢复',
+      action: () => operate(async () => { await action(); setSelection(null); setQuery(''); setView('today'); }, '备份已恢复，恢复前的数据另有自动备份。'),
+    });
+  }
 
   function startEdit(entity?: Task) {
     guarded(() => {
@@ -390,6 +397,7 @@ export default function App() {
 
   const searching = !!query.trim();
   const showActivity = view === 'activity' && !searching;
+  const showSettings = view === 'settings' && !searching;
   const closeDrawer = () => setDrawerOpen(false);
   const newAction = view === 'today' || view === 'schedule' ? { label: '新日程', run: () => startEventEdit() }
     : view === 'pending' ? { label: '新事项', run: () => startEdit() }
@@ -415,7 +423,7 @@ export default function App() {
     : view === 'quotas' ? <QuotaOverview items={state.quotas} /> : undefined;
 
   return <div className="app-shell">
-    <Sidebar active={searching ? null : view} counts={counts} trashCount={trashCount} onView={changeView} onData={() => guarded(() => setDataOpen(true))} onNotice={setNotice} onError={setError} />
+    <Sidebar active={searching ? null : view} counts={counts} trashCount={trashCount} onView={changeView} />
     <main className="workspace">
       <Topbar
         title={searching ? '搜索结果' : viewTitles[view]} description={searching ? '搜索事项、日程、额度与订阅。' : viewDescriptions[view]}
@@ -428,7 +436,8 @@ export default function App() {
       {externalChange && <div className="info-banner" role="status"><RefreshCw size={15} /><span>有新的外部改动（例如 folio 命令写入）。保存或取消当前编辑后会自动刷新。</span></div>}
       {notice && <div className="toast" role="status"><Check size={15} /><span>{notice}</span><button className="icon-button small" onClick={() => setNotice('')} aria-label="关闭提示"><X size={14} /></button></div>}
       <div className="content-grid">
-        {showActivity ? <ActivityView revision={revision} wide={wide} onOpen={(kind, id) => openEntity(kind, id)} onError={reportError} /> : <>
+        {showSettings ? <SettingsView revision={revision} onNotice={setNotice} onError={reportError} onRestore={restoreBackup} />
+        : showActivity ? <ActivityView revision={revision} wide={wide} onOpen={(kind, id) => openEntity(kind, id)} onError={reportError} /> : <>
           <ItemList
             listRef={listRef} loaded={!!state} error={error} items={items} view={view} searching={searching}
             selection={selection} busy={busy} filtersLocked={!!editing} filter={view === 'quotas' ? quotaFilter : subscriptionFilter}
@@ -452,8 +461,5 @@ export default function App() {
       categories={state.quotaCategories} countOf={id => state.quotas.filter(item => item.category === id).length}
       onClose={() => setCategoriesOpen(null)} onRefresh={load} />}
     <Confirm value={confirmation} onClose={() => setConfirmation(null)} />
-    <DataManager open={dataOpen} onOpenChange={setDataOpen} onNotice={setNotice} onError={setError} onRestore={async (action) => {
-      setConfirmation({ title: '从完整备份恢复', message: '恢复将替换应用中的事项、日程与服务条目。当前数据会先自动备份。', primary: '备份当前数据并恢复', action: () => operate(async () => { await action(); setDataOpen(false); setSelection(null); setQuery(''); setView('today'); }, '备份已恢复，恢复前的数据另有自动备份。') });
-    }} />
   </div>;
 }

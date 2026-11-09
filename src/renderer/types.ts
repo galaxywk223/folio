@@ -2,7 +2,7 @@ import type { Repeat, ScheduleEvent } from '../shared/schedule';
 import type { SubscriptionCategory } from '../shared/subscriptions';
 
 export type Kind = 'task' | 'quota' | 'subscription' | 'event';
-export type View = 'today' | 'schedule' | 'pending' | 'completed' | 'quotas' | 'subscriptions' | 'trash' | 'activity';
+export type View = 'today' | 'schedule' | 'pending' | 'completed' | 'quotas' | 'subscriptions' | 'trash' | 'activity' | 'settings';
 export type Task = {
   id: string; title: string; dateText: string; bodyMarkdown: string; status: 'pending' | 'completed';
   sortOrder: number; completedAt: string | null; createdAt: string; updatedAt: string; deletedAt: string | null; version: number;

@@ -7,7 +7,10 @@ import { startServer } from '../server/server.mjs'
 import { ensureCliOnPath } from './cli-path'
 import { ReminderScheduler } from './reminders'
 import type { NavigateTarget } from './reminders'
+import { readSettings, writeSettings } from './settings'
 import { UpdateManager } from './updater'
+import { normalizeSettings } from '../shared/settings'
+import type { AppSettings, SettingsInfo, SettingsPatch } from '../shared/settings'
 
 const { autoUpdater } = updaterPackage
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -32,6 +35,8 @@ let installing = false
 let isQuitting = false
 let trayHintShown = false
 let reminders: ReminderScheduler | null = null
+let settings: AppSettings = normalizeSettings(null)
+const settingsPath = () => join(app.getPath('userData'), 'settings.json')
 // 命令行在 Folio 未运行时用 --hidden 启动：只进托盘，不弹出窗口。
 const startHidden = process.argv.includes('--hidden')
 
@@ -48,6 +53,8 @@ if (!gotLock) {
 
 async function start(): Promise<void> {
   Menu.setApplicationMenu(null)
+  settings = readSettings(settingsPath())
+  nativeTheme.themeSource = settings.theme
 
   const running = await startServer(dataRoot, undefined, { allowDevOrigins: true })
   closeServer = running.close
@@ -69,6 +76,8 @@ async function start(): Promise<void> {
     await shell.openPath(dataRoot)
     return true
   })
+  ipcMain.handle('folio:settings-get', () => settingsInfo())
+  ipcMain.handle('folio:settings-set', (_event, patch: SettingsPatch) => updateSettings(patch))
 
   updates = new UpdateManager({
     client: autoUpdater,
@@ -97,6 +106,32 @@ async function start(): Promise<void> {
   reminders.start()
   if (app.isPackaged) void ensureCliOnPath(process.resourcesPath).catch(error => console.error('无法把 folio 命令加入 PATH', error))
   app.on('activate', () => { void showMainWindow() })
+}
+
+function settingsInfo(): SettingsInfo {
+  return {
+    ...settings,
+    // 开发运行时不注册自启动，否则开机会启动 electron.exe。
+    openAtLogin: app.isPackaged && app.getLoginItemSettings({ args: ['--hidden'] }).openAtLogin,
+    autostartSupported: app.isPackaged,
+    version: app.getVersion(),
+    dataDir: dataRoot,
+  }
+}
+
+function updateSettings(patch: SettingsPatch): SettingsInfo {
+  const input = patch && typeof patch === 'object' ? patch : {}
+  const next = normalizeSettings({ ...settings, ...input })
+  if (next.closeBehavior !== settings.closeBehavior || next.theme !== settings.theme) {
+    writeSettings(settingsPath(), next)
+    settings = next
+    nativeTheme.themeSource = next.theme
+  }
+  if (typeof input.openAtLogin === 'boolean' && app.isPackaged) {
+    // 开机时带 --hidden 启动：只进托盘，不弹窗口。
+    app.setLoginItemSettings({ openAtLogin: input.openAtLogin, args: ['--hidden'] })
+  }
+  return settingsInfo()
 }
 
 function createTray(): void {
@@ -170,6 +205,11 @@ async function createWindow(visible = true): Promise<BrowserWindow> {
   if (visible) window.once('ready-to-show', () => window.show())
   window.on('close', (event) => {
     if (isQuitting) return
+    if (settings.closeBehavior === 'quit') {
+      isQuitting = true
+      app.quit()
+      return
+    }
     event.preventDefault()
     window.hide()
     if (!trayHintShown && tray) {

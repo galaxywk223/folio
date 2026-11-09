@@ -1,5 +1,5 @@
 import type { RefObject, UIEvent } from 'react';
-import { Archive, Bell, CalendarClock, CalendarDays, CalendarRange, CheckCircle2, Circle, CreditCard, History, KeyRound, ListChecks, Loader2, MapPin, Repeat2, Sun, Trash2, Wallet } from 'lucide-react';
+import { Archive, Bell, CalendarClock, CalendarDays, CalendarRange, CheckCircle2, Circle, CreditCard, History, KeyRound, ListChecks, Loader2, MapPin, Repeat2, Settings, Sun, Trash2, Wallet } from 'lucide-react';
 import { getSteps } from '../../shared/markdown';
 import { timeRange } from '../../shared/schedule';
 import { dateTime } from '../api';
@@ -16,11 +16,12 @@ const emptyCopy: Record<View, { title: string; text: string }> = {
   quotas: { title: '还没有额度记录', text: '记录官方与中转平台的余额与入口。' },
   subscriptions: { title: '还没有订阅记录', text: '记录套餐、费用与到期日。' },
   trash: { title: '回收站为空', text: '删除内容后，可在这里恢复。' },
+  settings: { title: '设置', text: '' },
 };
 const emptyIcons: Record<View, React.ReactNode> = {
   today: <Sun size={26} />, schedule: <CalendarRange size={26} />, activity: <History size={26} />,
   pending: <Circle size={26} />, completed: <Archive size={26} />, quotas: <KeyRound size={26} />,
-  subscriptions: <CreditCard size={26} />, trash: <Trash2 size={26} />,
+  subscriptions: <CreditCard size={26} />, trash: <Trash2 size={26} />, settings: <Settings size={26} />,
 };
 
 export function ItemList({ listRef, loaded, error, items, view, searching, selection, busy, filtersLocked, filter, subscriptionCategories, quotaCategories, onManageCategories, header, onFilter, onChoose, onNew, onClearSearch, onReload, onScroll }: {

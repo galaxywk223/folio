@@ -1,10 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { SettingsInfo, SettingsPatch } from '../shared/settings'
 import type { UpdateStatus } from '../shared/updates'
 
 export type FolioBridge = {
   getApiBase: () => Promise<string>
   openExternal: (url: string) => Promise<boolean>
   openDataDir: () => Promise<boolean>
+  getSettings: () => Promise<SettingsInfo>
+  setSettings: (patch: SettingsPatch) => Promise<SettingsInfo>
   getUpdateStatus: () => Promise<UpdateStatus>
   checkForUpdates: () => Promise<UpdateStatus>
   installUpdate: () => Promise<{ started: boolean }>
@@ -16,6 +19,8 @@ const bridge: FolioBridge = {
   getApiBase: () => ipcRenderer.invoke('folio:get-api-base'),
   openExternal: (url) => ipcRenderer.invoke('folio:open-external', url),
   openDataDir: () => ipcRenderer.invoke('folio:open-data-dir'),
+  getSettings: () => ipcRenderer.invoke('folio:settings-get'),
+  setSettings: (patch) => ipcRenderer.invoke('folio:settings-set', patch),
   getUpdateStatus: () => ipcRenderer.invoke('folio:updates-get'),
   checkForUpdates: () => ipcRenderer.invoke('folio:updates-check'),
   installUpdate: () => ipcRenderer.invoke('folio:updates-install'),
