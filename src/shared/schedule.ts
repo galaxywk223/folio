@@ -23,6 +23,7 @@ export type Occurrence<T extends ScheduleEvent = ScheduleEvent> = { event: T; da
 export const REPEATS: readonly Repeat[] = ['none', 'daily', 'weekly']
 export const REMINDER_OPTIONS: readonly number[] = [0, 10, 30, 60, 90, 120]
 export const WEEKDAY_NAMES = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'] as const
+export const REPEAT_WINDOW_DAYS = 14
 const MAX_RANGE_DAYS = 400
 
 const pad = (value: number) => String(value).padStart(2, '0')
@@ -76,6 +77,28 @@ export function occurrencesBetween<T extends ScheduleEvent>(events: readonly T[]
   let date = from
   for (let index = 0; date <= to && index < MAX_RANGE_DAYS; index += 1, date = addDays(date, 1)) {
     for (const event of events) if (occursOn(event, date)) result.push({ event, date })
+  }
+  return result.sort(compareOccurrences)
+}
+
+/**
+ * 「日程」页和命令行默认看的范围：不重复的日程从今天起全部列出；重复日程只展开 repeatWindowDays 天，
+ * 起始日在窗口之后的重复日程列出它的第一次，免得看不到。
+ */
+export function upcomingOccurrences<T extends ScheduleEvent>(events: readonly T[], from: string, repeatWindowDays: number = REPEAT_WINDOW_DAYS): Occurrence<T>[] {
+  const windowEnd = addDays(from, repeatWindowDays - 1)
+  const result: Occurrence<T>[] = []
+  for (const event of events) {
+    if (event.deletedAt) continue
+    if (event.repeat === 'none') {
+      if (event.date >= from && occursOn(event, event.date)) result.push({ event, date: event.date })
+      continue
+    }
+    const inWindow = occurrencesBetween([event], from, windowEnd)
+    if (inWindow.length) { result.push(...inWindow); continue }
+    if (event.date <= windowEnd) continue
+    const first = occurrencesBetween([event], event.date, addDays(event.date, MAX_RANGE_DAYS))[0]
+    if (first) result.push(first)
   }
   return result.sort(compareOccurrences)
 }

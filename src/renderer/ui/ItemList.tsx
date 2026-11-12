@@ -9,7 +9,7 @@ import type { ApiQuota, EventItem, Item, Selection, Subscription, Task, View } f
 
 const emptyCopy: Record<View, { title: string; text: string }> = {
   today: { title: '今天没有安排', text: '今天的日程、到期待办和快到期的订阅会显示在这里。' },
-  schedule: { title: '未来两周没有日程', text: '新建日程，或让智能体用 folio 命令写入。' },
+  schedule: { title: '没有即将到来的日程', text: '新建日程，或让智能体用 folio 命令写入。' },
   activity: { title: '还没有改动记录', text: '' },
   pending: { title: '待办列表为空', text: '从一条真实事项开始。' },
   completed: { title: '还没有已完成事项', text: '完成的事项会保留在这里。' },

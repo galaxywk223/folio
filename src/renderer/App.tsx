@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Check, FileText, RefreshCw, X } from 'lucide-react';
 import { getSteps } from '../shared/markdown';
-import { addDays, localDate, occurrencesBetween, timeRange, weekdayLabel } from '../shared/schedule';
+import { addDays, localDate, occurrencesBetween, timeRange, upcomingOccurrences, weekdayLabel } from '../shared/schedule';
 import { matchesServiceFilter, matchesSubscriptionFilter } from '../shared/subscriptions';
 import { daysUntil, request } from './api';
 import { Confirm, Editor, Empty } from './components';
@@ -24,7 +24,7 @@ const viewTitles: Record<View, string> = {
 };
 const viewDescriptions: Record<View, string> = {
   today: '今天的日程、到期待办和 7 天内到期的订阅。',
-  schedule: '今天起两周内的日程，重复日程按天展开。',
+  schedule: '今天起的全部日程；重复日程只展开未来两周。',
   pending: '有日期事项在前，未定日期事项随后。',
   completed: '保留每件事项的说明与步骤记录。',
   quotas: '按分类记录官方与中转额度、入口与备注。',
@@ -33,7 +33,6 @@ const viewDescriptions: Record<View, string> = {
   activity: '应用内和 folio 命令写入的每一次改动。',
   settings: '启动、窗口、外观、数据备份与更新。',
 };
-const SCHEDULE_DAYS = 14;
 const SUBSCRIPTION_SOON_DAYS = 7;
 const REVISION_POLL_MS = 3000;
 type Editing =
@@ -204,7 +203,7 @@ export default function App() {
       return [...events, ...tasks, ...subscriptions];
     }
     if (view === 'schedule') {
-      return occurrencesBetween(state.events, today, addDays(today, SCHEDULE_DAYS - 1)).map(({ event, date }) => eventItem(event, date, dayLabel(date, today)));
+      return upcomingOccurrences(state.events, today).map(({ event, date }) => eventItem(event, date, dayLabel(date, today)));
     }
     if (view === 'trash') return all.filter(item => item.entity.deletedAt).sort((a, b) => b.entity.deletedAt!.localeCompare(a.entity.deletedAt!));
     if (view === 'pending' || view === 'completed') {
@@ -246,7 +245,7 @@ export default function App() {
       tasks: due.length,
       overdue: due.filter(task => task.dateText.slice(0, 10) < today).length,
       subscriptions: state.subscriptions.filter(item => { const days = daysUntil(item.expiresAt); return !item.deletedAt && days !== null && days >= 0 && days <= SUBSCRIPTION_SOON_DAYS; }).length,
-      schedule: occurrencesBetween(state.events, today, addDays(today, SCHEDULE_DAYS - 1)).length,
+      schedule: upcomingOccurrences(state.events, today).length,
     };
   }, [state, today]);
   const counts = state ? {
@@ -284,8 +283,8 @@ export default function App() {
       if (kind === 'task') { setView((entity as Task).status); setSelection({ kind, id }); return; }
       if (kind === 'quota') { setView('quotas'); setQuotaFilter('all'); setSelection({ kind, id }); return; }
       if (kind === 'subscription') { setView('subscriptions'); setSubscriptionFilter('all'); setSelection({ kind, id }); return; }
-      const next = date || occurrencesBetween([entity as EventItem], today, addDays(today, SCHEDULE_DAYS - 1))[0]?.date;
-      if (next && next >= today && next <= addDays(today, SCHEDULE_DAYS - 1)) { setView(next === today ? 'today' : 'schedule'); setSelection({ kind, id, date: next }); }
+      const next = date || upcomingOccurrences([entity as EventItem], today)[0]?.date;
+      if (next && next >= today) { setView(next === today ? 'today' : 'schedule'); setSelection({ kind, id, date: next }); }
       else { setQuery(entityTitle(entity)); setSelection({ kind, id }); }
     });
   }
@@ -367,7 +366,7 @@ export default function App() {
   async function saveEvent(value: EventDraft) {
     if (!editing || editing.kind !== 'event') return;
     const record = await request<EventItem>('/api/events' + (editing.id ? '/' + editing.id : ''), editing.id ? 'PATCH' : 'POST', value);
-    const next = occurrencesBetween([record], today, addDays(today, SCHEDULE_DAYS - 1))[0]?.date;
+    const next = upcomingOccurrences([record], today)[0]?.date;
     setEditing(null); setDirty(false); setQuery(''); setNotice('已保存');
     if (next) { setView(view === 'today' && next === today ? 'today' : 'schedule'); setSelection({ kind: 'event', id: record.id, date: next }); }
     else { setQuery(record.title); setSelection({ kind: 'event', id: record.id }); }

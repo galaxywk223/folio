@@ -19,7 +19,7 @@ await build({
   },
   outfile: bundle, bundle: true, platform: 'node', format: 'esm', packages: 'external', logLevel: 'silent',
 });
-const { Store, startServer, occurrencesBetween, occursOn, dueReminders, reminderAt, repeatLabel } = await import(pathToFileURL(bundle).href);
+const { Store, startServer, occurrencesBetween, upcomingOccurrences, occursOn, dueReminders, reminderAt, repeatLabel } = await import(pathToFileURL(bundle).href);
 const stores = new Set();
 const root = () => path.join(scratch, crypto.randomUUID());
 function open(directory = root()) { const store = new Store(directory); stores.add(store); return store; }
@@ -45,6 +45,20 @@ test('repeat rules expand occurrences in range', () => {
   assert.deepEqual(dates([ev({ repeat: 'daily', deletedAt: '2026-11-06T00:00:00Z' })], '2026-11-06', '2026-11-10'), []);
   assert.equal(occursOn(ev({ repeat: 'weekly' }), '2026-11-05'), false, 'before the first date');
   assert.equal(repeatLabel(ev({ repeat: 'weekly', repeatDays: [0, 5] })), '每周五、周日');
+});
+
+test('upcoming occurrences list every future one-off event but only a window of repeats', () => {
+  const from = '2026-11-12';
+  const upcoming = events => upcomingOccurrences(events, from).map(item => item.event.id + '@' + item.date);
+  assert.deepEqual(upcoming([ev({ id: 'exam', date: '2026-12-13' })]), ['exam@2026-12-13'], 'beyond the 14-day window');
+  assert.deepEqual(upcoming([ev({ id: 'far', date: '2027-08-01' })]), ['far@2027-08-01'], 'even months away');
+  assert.deepEqual(upcoming([ev({ id: 'past', date: '2026-11-11' })]), [], 'past one-off events are not upcoming');
+  assert.deepEqual(upcoming([ev({ id: 'today', date: '2026-11-12' })]), ['today@2026-11-12']);
+  assert.equal(upcomingOccurrences([ev({ repeat: 'daily', date: '2026-11-01' })], from).length, 14, 'daily repeats expand 14 days');
+  assert.deepEqual(upcoming([ev({ id: 'w', repeat: 'weekly', date: '2026-12-04' })]), ['w@2026-12-04'], 'repeat starting later shows its first occurrence');
+  assert.deepEqual(upcoming([ev({ id: 'ended', repeat: 'weekly', date: '2026-10-01', repeatUntil: '2026-10-31' })]), []);
+  assert.deepEqual(upcoming([ev({ id: 'gone', date: '2026-12-13', deletedAt: '2026-11-12T00:00:00Z' })]), []);
+  assert.deepEqual(upcoming([ev({ id: 'b', date: '2026-12-13', startTime: '10:00' }), ev({ id: 'a', date: '2026-11-13' })]), ['a@2026-11-13', 'b@2026-12-13'], 'sorted by date');
 });
 
 test('occurrences sort all-day first, then by start time', () => {

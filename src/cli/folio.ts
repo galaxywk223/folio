@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { KIND_SPECS, kindSpec } from '../shared/fields'
 import type { FieldSpec, KindSpec } from '../shared/fields'
-import { addDays, localDate, occurrencesBetween } from '../shared/schedule'
+import { addDays, localDate, occurrencesBetween, upcomingOccurrences } from '../shared/schedule'
 import type { ScheduleEvent } from '../shared/schedule'
 
 const VERSION = typeof __FOLIO_VERSION__ === 'string' ? __FOLIO_VERSION__ : 'dev'
@@ -179,10 +179,14 @@ function list(state: State, spec: KindSpec, options: Record<string, string | tru
     rows = rows.filter(row => row.category === id)
   }
   if (spec.kind === 'event' && !deleted && options.all !== true) {
+    const events = rows as (Entity & ScheduleEvent)[]
+    if (options.from === undefined && options.to === undefined) {
+      return upcomingOccurrences(events, localDate()).map(({ event, date }) => ({ occurrence: date, ...event }))
+    }
     const from = dateOption(options.from, localDate())
     const to = dateOption(options.to, addDays(from, 13))
     if (to < from) throw new CliError('--to 不能早于 --from。', 'BAD_DATE')
-    return occurrencesBetween(rows as (Entity & ScheduleEvent)[], from, to).map(({ event, date }) => ({ occurrence: date, ...event }))
+    return occurrencesBetween(events, from, to).map(({ event, date }) => ({ occurrence: date, ...event }))
   }
   return rows
 }
@@ -223,8 +227,8 @@ export function helpText(name?: string): string {
     '  folio help [类型]                         查看命令，或某个类型的全部字段',
     '  folio today                               今天的日程、到期待办、7 天内到期的订阅',
     '  folio list <类型> [选项]                   列表。--deleted 只看回收站；task 可加 --status pending|completed；',
-    '                                            quota/subscription 可加 --category 分类名；event 默认展开今天起 14 天，',
-    '                                            可用 --from/--to YYYY-MM-DD 改范围，--all 列出日程本身（不展开）',
+    '                                            quota/subscription 可加 --category 分类名；event 默认列出今天起的全部日程，',
+    '                                            重复日程只展开 14 天；可用 --from/--to YYYY-MM-DD 指定范围，--all 列出日程本身（不展开）',
     '  folio get <类型> <id>                      查看一条',
     '  folio search <关键词>                      在所有类型里搜索',
     '  folio add <类型> --字段 值 …               新建；也可以 --json \'{…}\'，或 --json - 从标准输入读 JSON',
