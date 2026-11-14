@@ -1,10 +1,12 @@
 import type { RefObject, UIEvent } from 'react';
-import { Archive, Bell, CalendarClock, CalendarDays, CalendarRange, CheckCircle2, Circle, CreditCard, History, KeyRound, ListChecks, Loader2, MapPin, Repeat2, Settings, Sun, Trash2, Wallet } from 'lucide-react';
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+import { Archive, Bell, CalendarClock, CalendarDays, CalendarRange, Check, CheckCircle2, ChevronDown, Circle, CreditCard, History, KeyRound, ListChecks, Loader2, MapPin, Repeat2, Settings, Settings2, Sun, Trash2 } from 'lucide-react';
 import { getSteps } from '../../shared/markdown';
 import { timeRange } from '../../shared/schedule';
 import { dateTime } from '../api';
 import { Empty } from '../components';
 import { expiryClass, expiryLabel, expiryUrgent } from '../format';
+import type { CategoryNav } from './Sidebar';
 import type { ApiQuota, EventItem, Item, Selection, Subscription, Task, View } from '../types';
 
 const emptyCopy: Record<View, { title: string; text: string }> = {
@@ -24,20 +26,21 @@ const emptyIcons: Record<View, React.ReactNode> = {
   subscriptions: <CreditCard size={26} />, trash: <Trash2 size={26} />, settings: <Settings size={26} />,
 };
 
-export function ItemList({ listRef, loaded, error, items, view, searching, selection, busy, filtersLocked, filter, subscriptionCategories, quotaCategories, onManageCategories, header, onFilter, onChoose, onNew, onClearSearch, onReload, onScroll }: {
+export function ItemList({ listRef, loaded, error, items, view, searching, selection, busy, categoryNav, subscriptionCategories, quotaCategories, header, onChoose, onNew, onClearSearch, onReload, onScroll }: {
   listRef: RefObject<HTMLElement | null>; loaded: boolean; error: string; items: Item[]; view: View; searching: boolean;
-  selection: Selection | null; busy: boolean; filtersLocked: boolean; filter: string; subscriptionCategories: ReadonlyMap<string, string>; quotaCategories: ReadonlyMap<string, string>; onManageCategories?: () => void; header?: React.ReactNode;
-  onFilter: (filter: string) => void; onChoose: (item: Item) => void; onNew?: () => void;
+  selection: Selection | null; busy: boolean; categoryNav?: CategoryNav; subscriptionCategories: ReadonlyMap<string, string>; quotaCategories: ReadonlyMap<string, string>; header?: React.ReactNode;
+  onChoose: (item: Item) => void; onNew?: () => void;
   onClearSearch: () => void; onReload: () => void; onScroll: (event: UIEvent<HTMLElement>) => void;
 }) {
-  const categories = [...(view === 'subscriptions' ? subscriptionCategories : quotaCategories)];
   const inTrash = view === 'trash' && !searching;
+  // 分组或已选分类时，分类已经写在组标题或侧栏里，行里不再重复；搜索结果里保留。
+  const showCategory = searching;
   return <section ref={listRef} className="list-pane card" aria-label="内容列表" onScroll={onScroll}>
     {header}
-    {(view === 'subscriptions' || view === 'quotas') && !searching && <div className="list-filters"><div className="segmented" role="group" aria-label={view === 'quotas' ? '额度分类' : '订阅分类'}>
-      {[['all', '全部'], ...categories].map(([id, name]) => <button key={id} className={filter === id ? 'active' : ''} aria-pressed={filter === id} disabled={filtersLocked || busy} onClick={() => onFilter(id)}>{name}</button>)}
-    </div>{onManageCategories && <button className="button secondary" disabled={filtersLocked || busy} onClick={onManageCategories}>管理分类</button>}</div>}
-    <div className="list-heading"><span>{items.length} 项内容</span>{busy && <span><Loader2 className="spinning" size={13} />正在保存</span>}</div>
+    <div className="list-heading">
+      {categoryNav ? <CategoryDropdown nav={categoryNav} /> : <span />}
+      <span className="list-count">{busy ? <><Loader2 className="spinning" size={13} />正在保存</> : items.length + ' 项'}</span>
+    </div>
     {!loaded ? <Empty title={error ? '暂时无法读取数据' : '正在读取本地记录'} text={error ? '本地服务恢复后可重新读取，编辑内容不会清空。' : '正在连接本机服务。'} action={error ? onReload : undefined} actionLabel="重新读取" icon={<Loader2 size={25} className={error ? '' : 'spinning'} />} />
       : !items.length ? <Empty
         title={searching ? '没有找到匹配内容' : emptyCopy[view].title}
@@ -51,23 +54,61 @@ export function ItemList({ listRef, loaded, error, items, view, searching, selec
         const urgent = item.kind === 'subscription' && expiryUrgent((item.entity as Subscription).expiresAt);
         const groupStart = !!item.group && (index === 0 || items[index - 1].group !== item.group);
         return <div key={item.kind + item.id + (item.date ?? '')}>
-          {groupStart && <div className="list-group-label">{item.group}</div>}
+          {groupStart && <div className="list-group-label"><span>{item.group}</span></div>}
           <button className={'content-row' + (selected ? ' selected' : '') + (urgent ? ' urgent' : '')} onClick={() => onChoose(item)} aria-pressed={selected}>
-            <span className={'row-icon ' + item.kind + (item.kind === 'task' && (item.entity as Task).status === 'completed' ? ' done' : '')}>
-              {item.kind === 'task' ? ((item.entity as Task).status === 'completed' ? <CheckCircle2 size={18} /> : <Circle size={18} />)
-                : item.kind === 'quota' ? <Wallet size={17} /> : item.kind === 'event' ? <CalendarClock size={17} /> : <CreditCard size={17} />}
-            </span>
-            <span className="row-content"><strong>{item.title}</strong><span className="row-metadata">
-              {inTrash ? <span>删除于 {dateTime(item.entity.deletedAt)}</span> : <RowMeta item={item} searching={searching} subscriptionCategories={subscriptionCategories} quotaCategories={quotaCategories} />}
+            {item.kind === 'quota' || item.kind === 'subscription'
+              ? <Avatar name={rowTitle(item)} />
+              : <span className={'row-icon ' + item.kind + (item.kind === 'task' && (item.entity as Task).status === 'completed' ? ' done' : '')}>
+                {item.kind === 'task' ? ((item.entity as Task).status === 'completed' ? <CheckCircle2 size={18} /> : <Circle size={18} />) : <CalendarClock size={17} />}
+              </span>}
+            <span className="row-content"><strong>{rowTitle(item)}</strong><span className="row-metadata">
+              {inTrash ? <span>删除于 {dateTime(item.entity.deletedAt)}</span> : <RowMeta item={item} searching={searching} showCategory={showCategory} subscriptionCategories={subscriptionCategories} quotaCategories={quotaCategories} />}
             </span></span>
-            {item.kind === 'quota' && !inTrash && <span className="row-value">{(item.entity as ApiQuota).balance || '—'}</span>}
+            {!inTrash && item.kind === 'quota' && <span className="row-side"><strong>{(item.entity as ApiQuota).balance || '—'}</strong>{(item.entity as ApiQuota).recordedAt && <small>{(item.entity as ApiQuota).recordedAt}</small>}</span>}
+            {!inTrash && item.kind === 'subscription' && <SubscriptionSide sub={item.entity as Subscription} />}
           </button>
         </div>;
       })}</div>}
   </section>;
 }
 
-function RowMeta({ item, searching, subscriptionCategories, quotaCategories }: { item: Item; searching: boolean; subscriptionCategories: ReadonlyMap<string, string>; quotaCategories: ReadonlyMap<string, string> }) {
+function rowTitle(item: Item) {
+  if (item.kind === 'quota') return (item.entity as ApiQuota).platform;
+  if (item.kind === 'subscription') return (item.entity as Subscription).service;
+  return item.title;
+}
+
+function CategoryDropdown({ nav }: { nav: CategoryNav }) {
+  const current = nav.categories.find(category => category.id === nav.filter)?.name ?? '全部';
+  return <DropdownMenu.Root>
+    <DropdownMenu.Trigger className="category-dropdown" disabled={nav.locked}>分类：{current}<ChevronDown size={14} /></DropdownMenu.Trigger>
+    <DropdownMenu.Portal><DropdownMenu.Content className="dropdown" sideOffset={6} align="start">
+      {[{ id: 'all', name: '全部', count: -1 }, ...nav.categories].map(category => <DropdownMenu.Item key={category.id} className="dropdown-item" onSelect={() => nav.onFilter(category.id)}>
+        <span className="dropdown-check">{nav.filter === category.id && <Check size={14} />}</span><span>{category.name}</span>{category.count >= 0 && <small className="dropdown-count">{category.count}</small>}
+      </DropdownMenu.Item>)}
+      <DropdownMenu.Separator className="dropdown-separator" />
+      <DropdownMenu.Item className="dropdown-item" onSelect={nav.onManage}><Settings2 size={14} />管理分类</DropdownMenu.Item>
+    </DropdownMenu.Content></DropdownMenu.Portal>
+  </DropdownMenu.Root>;
+}
+
+// 首字母头像：颜色由名字决定，同一个服务每次都是同一个颜色。
+const AVATAR_TONES = 8;
+function Avatar({ name }: { name: string }) {
+  const text = name.trim();
+  let hash = 0;
+  for (const char of text) hash = (hash * 31 + char.codePointAt(0)!) >>> 0;
+  const first = [...text][0] ?? '?';
+  return <span className={'avatar tone-' + (hash % AVATAR_TONES)} aria-hidden="true">{/[a-z]/i.test(first) ? first.toUpperCase() : first}</span>;
+}
+
+function SubscriptionSide({ sub }: { sub: Subscription }) {
+  if (!sub.expiresAt) return <span className="row-side"><small>未填到期日</small></span>;
+  const label = expiryLabel(sub.expiresAt).replace(/^ · /, '');
+  return <span className={'row-side ' + expiryClass(sub.expiresAt)}><strong>{sub.expiresAt}</strong>{label && <small>{label}</small>}</span>;
+}
+
+function RowMeta({ item, searching, showCategory, subscriptionCategories, quotaCategories }: { item: Item; searching: boolean; showCategory: boolean; subscriptionCategories: ReadonlyMap<string, string>; quotaCategories: ReadonlyMap<string, string> }) {
   if (item.kind === 'task') {
     const task = item.entity as Task;
     const steps = getSteps(task.bodyMarkdown);
@@ -89,15 +130,14 @@ function RowMeta({ item, searching, subscriptionCategories, quotaCategories }: {
   if (item.kind === 'quota') {
     const quota = item.entity as ApiQuota;
     return <>
-      <span className="badge">{quotaCategories.get(quota.category)}</span>
-      <span className="badge">{quota.kind}</span>
-      {quota.recordedAt && <span>记录于 {quota.recordedAt}</span>}
+      {showCategory && <span className="badge">{quotaCategories.get(quota.category)}</span>}
+      <span className={'badge' + (quota.kind === '中转' ? ' accent' : '')}>{quota.kind}</span>
+      {quota.account && <span className="meta-text">{quota.account}</span>}
     </>;
   }
   const sub = item.entity as Subscription;
   return <>
-    <span className="badge">{subscriptionCategories.get(sub.category)}</span>
-    <span>{sub.plan || '未填套餐'}</span>
-    {sub.expiresAt && <span className={'badge ' + expiryClass(sub.expiresAt)}><CalendarDays size={12} />{sub.expiresAt}{expiryLabel(sub.expiresAt)}</span>}
+    {showCategory && <span className="badge">{subscriptionCategories.get(sub.category)}</span>}
+    <span className="meta-text">{[sub.plan || '未填套餐', sub.account].filter(Boolean).join(' · ')}</span>
   </>;
 }

@@ -1,8 +1,18 @@
-import { CalendarRange, CheckCircle2, Circle, CreditCard, History, Settings, Sun, Trash2, Wallet } from 'lucide-react';
+import { CalendarRange, CheckCircle2, Circle, CreditCard, History, Settings, Settings2, Sun, Trash2, Wallet } from 'lucide-react';
 import { useUpdateStatus } from './UpdateSection';
 import type { View } from '../types';
 
 type Counts = Record<'today' | 'schedule' | 'pending' | 'completed' | 'quotas' | 'subscriptions', number>;
+
+// 当前服务页（额度或订阅）的分类，竖着列在对应导航项下面。
+export type CategoryNav = {
+  view: 'quotas' | 'subscriptions';
+  categories: { id: string; name: string; count: number }[];
+  filter: string;
+  locked: boolean;
+  onFilter: (id: string) => void;
+  onManage: () => void;
+};
 
 const groups = [
   { caption: '事务', label: '事务导航', items: [
@@ -17,8 +27,8 @@ const groups = [
   ] },
 ];
 
-export function Sidebar({ active, counts, trashCount, onView }: {
-  active: View | null; counts: Counts; trashCount: number; onView: (view: View) => void;
+export function Sidebar({ active, counts, trashCount, categoryNav, onView }: {
+  active: View | null; counts: Counts; trashCount: number; categoryNav?: CategoryNav; onView: (view: View) => void;
 }) {
   const [update] = useUpdateStatus();
   const updateReady = update?.phase === 'downloaded';
@@ -26,9 +36,12 @@ export function Sidebar({ active, counts, trashCount, onView }: {
     <div className="brand"><span className="brand-mark" aria-hidden="true"><FolioMark /></span><span>Folio</span></div>
     {groups.map(group => <div className="nav-group" key={group.caption}>
       <p className="nav-caption">{group.caption}</p>
-      <nav aria-label={group.label}>{group.items.map(item => <button key={item.id} className={'nav-item ' + (active === item.id ? 'active' : '')} onClick={() => onView(item.id)} title={item.title}>
-        <item.icon size={17} /><span>{item.title}</span><small>{counts[item.id]}</small>
-      </button>)}</nav>
+      <nav aria-label={group.label}>{group.items.map(item => <div key={item.id}>
+        <button className={'nav-item ' + (active === item.id ? 'active' : '')} onClick={() => onView(item.id)} title={item.title}>
+          <item.icon size={17} /><span>{item.title}</span><small>{counts[item.id]}</small>
+        </button>
+        {categoryNav && categoryNav.view === item.id && <CategoryList nav={categoryNav} total={counts[item.id]} />}
+      </div>)}</nav>
     </div>)}
     <div className="sidebar-bottom">
       <button className={'nav-item ' + (active === 'trash' ? 'active' : '')} onClick={() => onView('trash')} title="回收站"><Trash2 size={17} /><span>回收站</span>{trashCount > 0 && <small>{trashCount}</small>}</button>
@@ -39,6 +52,21 @@ export function Sidebar({ active, counts, trashCount, onView }: {
       <div className="local-status"><span />本地保存 · 离线可用</div>
     </div>
   </aside>;
+}
+
+function CategoryList({ nav, total }: { nav: CategoryNav; total: number }) {
+  const label = nav.view === 'quotas' ? '额度分类' : '订阅分类';
+  return <div className="nav-sub" role="group" aria-label={label}>
+    <div className="nav-sub-heading"><span>分类</span>
+      <button className="icon-button small" title="管理分类" aria-label={'管理' + label} disabled={nav.locked} onClick={nav.onManage}><Settings2 size={14} /></button>
+    </div>
+    {/* 空的分类（比如「其他」）不占位置，选中时仍显示。 */}
+    {[{ id: 'all', name: '全部', count: total }, ...nav.categories.filter(category => category.count || category.id === nav.filter)].map(category =>
+      <button key={category.id} className={'nav-sub-item' + (nav.filter === category.id ? ' active' : '') + (category.count ? '' : ' empty')}
+        aria-pressed={nav.filter === category.id} disabled={nav.locked} onClick={() => nav.onFilter(category.id)} title={category.name}>
+        <i aria-hidden="true" /><span>{category.name}</span><small>{category.count}</small>
+      </button>)}
+  </div>;
 }
 
 function FolioMark() {

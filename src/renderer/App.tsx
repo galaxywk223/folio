@@ -17,6 +17,7 @@ import { QuotaOverview, SubscriptionOverview, TodayOverview } from './ui/Overvie
 import { ServiceEditor } from './ui/ServiceEditor';
 import { SettingsView } from './ui/SettingsView';
 import { Sidebar } from './ui/Sidebar';
+import type { CategoryNav } from './ui/Sidebar';
 import { Topbar } from './ui/Topbar';
 
 const viewTitles: Record<View, string> = {
@@ -210,8 +211,19 @@ export default function App() {
       return state.tasks.filter(task => !task.deletedAt && task.status === view)
         .map(task => taskItem(task, view === 'pending' && !task.dateText ? '未定日期' : undefined));
     }
+    // 「全部」按分类顺序分组，组内保持原来的排序。
+    const groupByCategory = (list: Item[], categories: { id: string; name: string }[]) => {
+      const rank = new Map(categories.map(({ id }, index) => [id, index]));
+      const categoryOf = (item: Item) => (item.entity as ApiQuota | Subscription).category;
+      const sizes = new Map<string, number>();
+      list.forEach(item => sizes.set(categoryOf(item), (sizes.get(categoryOf(item)) ?? 0) + 1));
+      const names = new Map(categories.map(({ id, name }) => [id, name]));
+      return [...list]
+        .sort((a, b) => (rank.get(categoryOf(a)) ?? 999) - (rank.get(categoryOf(b)) ?? 999))
+        .map(item => ({ ...item, group: (names.get(categoryOf(item)) ?? '其他') + ' · ' + sizes.get(categoryOf(item)) }));
+    };
     if (view === 'quotas') {
-      return all
+      const quotas = all
         .filter(item => item.kind === 'quota' && matchesServiceFilter(item.entity as ApiQuota, quotaFilter))
         .sort((a, b) => {
           const aVal = parseBalance((a.entity as ApiQuota).balance);
@@ -221,8 +233,12 @@ export default function App() {
           if (bVal === null) return -1;
           return bVal - aVal;
         });
+      return quotaFilter === 'all' ? groupByCategory(quotas, state.quotaCategories) : quotas;
     }
-    if (view === 'subscriptions') return all.filter(item => item.kind === 'subscription' && matchesSubscriptionFilter(item.entity as Subscription, subscriptionFilter));
+    if (view === 'subscriptions') {
+      const subscriptions = all.filter(item => item.kind === 'subscription' && matchesSubscriptionFilter(item.entity as Subscription, subscriptionFilter));
+      return subscriptionFilter === 'all' ? groupByCategory(subscriptions, state.subscriptionCategories) : subscriptions;
+    }
     return [];
   }, [state, view, query, today, subscriptionFilter, quotaFilter, categoryNames, quotaCategoryNames]);
   useEffect(() => {
@@ -395,6 +411,22 @@ export default function App() {
   }
 
   const searching = !!query.trim();
+  const serviceView = !searching && (view === 'quotas' || view === 'subscriptions') ? view : null;
+  const filterCategory = (category: string) => guarded(() => {
+    if (view === 'quotas') setQuotaFilter(category); else setSubscriptionFilter(category);
+    setSelection(null); setDrawerOpen(false);
+  });
+  const categoryNav: CategoryNav | undefined = state && serviceView ? {
+    view: serviceView,
+    categories: (serviceView === 'quotas' ? state.quotaCategories : state.subscriptionCategories).map(({ id, name }) => ({
+      id, name,
+      count: (serviceView === 'quotas' ? state.quotas : state.subscriptions).filter(item => !item.deletedAt && item.category === id).length,
+    })),
+    filter: serviceView === 'quotas' ? quotaFilter : subscriptionFilter,
+    locked: !!editing || busy,
+    onFilter: filterCategory,
+    onManage: () => setCategoriesOpen(serviceView === 'quotas' ? 'quota' : 'subscription'),
+  } : undefined;
   const showActivity = view === 'activity' && !searching;
   const showSettings = view === 'settings' && !searching;
   const closeDrawer = () => setDrawerOpen(false);
@@ -422,7 +454,7 @@ export default function App() {
     : view === 'quotas' ? <QuotaOverview items={state.quotas} /> : undefined;
 
   return <div className="app-shell">
-    <Sidebar active={searching ? null : view} counts={counts} trashCount={trashCount} onView={changeView} />
+    <Sidebar active={searching ? null : view} counts={counts} trashCount={trashCount} categoryNav={categoryNav} onView={changeView} />
     <main className="workspace">
       <Topbar
         title={searching ? '搜索结果' : viewTitles[view]} description={searching ? '搜索事项、日程、额度与订阅。' : viewDescriptions[view]}
@@ -439,11 +471,9 @@ export default function App() {
         : showActivity ? <ActivityView revision={revision} wide={wide} onOpen={(kind, id) => openEntity(kind, id)} onError={reportError} /> : <>
           <ItemList
             listRef={listRef} loaded={!!state} error={error} items={items} view={view} searching={searching}
-            selection={selection} busy={busy} filtersLocked={!!editing} filter={view === 'quotas' ? quotaFilter : subscriptionFilter}
+            selection={selection} busy={busy} categoryNav={categoryNav}
             header={header}
             subscriptionCategories={categoryNames} quotaCategories={quotaCategoryNames}
-            onManageCategories={state && (view === 'subscriptions' || view === 'quotas') ? () => setCategoriesOpen(view === 'quotas' ? 'quota' : 'subscription') : undefined}
-            onFilter={category => guarded(() => { if (view === 'quotas') setQuotaFilter(category); else setSubscriptionFilter(category); setSelection(null); setDrawerOpen(false); })}
             onChoose={choose} onNew={newAction?.run} onClearSearch={() => setQuery('')}
             onReload={() => void load().catch(failure => setError(failure.message))}
             onScroll={event => { scrollPositions.current[effectiveView] = event.currentTarget.scrollTop; }}
