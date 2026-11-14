@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Check, FileText, RefreshCw, X } from 'lucide-react';
 import { getSteps } from '../shared/markdown';
-import { addDays, localDate, occurrencesBetween, timeRange, upcomingOccurrences, weekdayLabel } from '../shared/schedule';
+import { addDays, localDate, occurrencesBetween, timeRange, upcomingOccurrences, weekdayLabel, withSkipped } from '../shared/schedule';
 import { matchesServiceFilter, matchesSubscriptionFilter } from '../shared/subscriptions';
 import { daysUntil, request } from './api';
 import { Confirm, Editor, Empty } from './components';
@@ -167,8 +167,8 @@ export default function App() {
 
   const items = useMemo<Item[]>(() => {
     if (!state) return [];
-    const eventItem = (event: EventItem, date?: string, group?: string): Item => ({
-      kind: 'event', id: event.id, date, group, title: event.title,
+    const eventItem = (event: EventItem, date?: string, group?: string, skipped = false): Item => ({
+      kind: 'event', id: event.id, date, group, skipped, title: event.title,
       subtitle: (date ? '' : event.date + ' ') + timeRange(event), entity: event,
     });
     const subscriptionItem = (item: Subscription, group?: string): Item => ({ kind: 'subscription', id: item.id, group, title: item.service + (item.account ? ' · ' + item.account : ''), subtitle: [item.plan, item.expiresAt].filter(Boolean).join(' · '), entity: item });
@@ -194,7 +194,7 @@ export default function App() {
       });
     }
     if (view === 'today') {
-      const events = occurrencesBetween(state.events, today, today).map(({ event, date }) => eventItem(event, date, '日程'));
+      const events = withSkipped(state.events, list => occurrencesBetween(list, today, today)).map(({ event, date, skipped }) => eventItem(event, date, '日程', skipped));
       const tasks = state.tasks.filter(task => !task.deletedAt && task.status === 'pending' && task.dateText && task.dateText.slice(0, 10) <= today)
         .map(task => taskItem(task, '待办'));
       const subscriptions = state.subscriptions.filter(item => {
@@ -204,7 +204,7 @@ export default function App() {
       return [...events, ...tasks, ...subscriptions];
     }
     if (view === 'schedule') {
-      return upcomingOccurrences(state.events, today).map(({ event, date }) => eventItem(event, date, dayLabel(date, today)));
+      return withSkipped(state.events, list => upcomingOccurrences(list, today)).map(({ event, date, skipped }) => eventItem(event, date, dayLabel(date, today), skipped));
     }
     if (view === 'trash') return all.filter(item => item.entity.deletedAt).sort((a, b) => b.entity.deletedAt!.localeCompare(a.entity.deletedAt!));
     if (view === 'pending' || view === 'completed') {
@@ -299,7 +299,7 @@ export default function App() {
       if (kind === 'task') { setView((entity as Task).status); setSelection({ kind, id }); return; }
       if (kind === 'quota') { setView('quotas'); setQuotaFilter('all'); setSelection({ kind, id }); return; }
       if (kind === 'subscription') { setView('subscriptions'); setSubscriptionFilter('all'); setSelection({ kind, id }); return; }
-      const next = date || upcomingOccurrences([entity as EventItem], today)[0]?.date;
+      const next = date || withSkipped([entity as EventItem], list => upcomingOccurrences(list, today))[0]?.date;
       if (next && next >= today) { setView(next === today ? 'today' : 'schedule'); setSelection({ kind, id, date: next }); }
       else { setQuery(entityTitle(entity)); setSelection({ kind, id }); }
     });
@@ -395,18 +395,26 @@ export default function App() {
     if (!editing || editing.kind !== 'event') return;
     const record = await request<EventItem>('/api/events' + (editing.id ? '/' + editing.id : ''), editing.id ? 'PATCH' : 'POST', value);
     await applyLogo('/api/events', record.id, logo);
-    const next = upcomingOccurrences([record], today)[0]?.date;
+    const next = withSkipped([record], list => upcomingOccurrences(list, today))[0]?.date;
     setEditing(null); setDirty(false); setQuery(''); setNotice('已保存');
     if (next) { setView(view === 'today' && next === today ? 'today' : 'schedule'); setSelection({ kind: 'event', id: record.id, date: next }); }
     else { setQuery(record.title); setSelection({ kind: 'event', id: record.id }); }
     void load().catch(failure => setError('内容已经保存，列表刷新失败：' + failure.message));
   }
+  function unskipOccurrence(event: EventItem, date: string) {
+    void operate(() => request('/api/events/' + event.id + '/unskip', 'POST', { date, version: event.version }), '已恢复这一次');
+  }
   function skipOccurrence(event: EventItem, date: string) {
+    const when = date + ' ' + weekdayLabel(date);
+    const message = event.repeat === 'none'
+      ? '“' + event.title + '”（' + when + '）这次不去了：不会提醒，列表里显示为已跳过，随时可以恢复。'
+      : '“' + event.title + '”在 ' + when + ' 这一次不会提醒，列表里显示为已跳过；其他日子照常，随时可以恢复。';
     setConfirmation({
-      title: '跳过这一次', message: '“' + event.title + '”在 ' + date + ' ' + weekdayLabel(date) + ' 这一次不再显示，也不会提醒；其他日子照常。', primary: '跳过这一次',
+      title: '跳过这一次', message, primary: '跳过这一次',
       action: () => operate(() => request('/api/events/' + event.id + '/skip', 'POST', { date, version: event.version }), '已跳过这一次'),
     });
   }
+
   function completeTask(task: Task) {
     const status = task.status === 'pending' ? 'completed' : 'pending';
     const action = () => operate(() => request('/api/tasks/' + task.id, 'PATCH', { status, version: task.version, confirmIncomplete: true }), status === 'completed' ? '事项已归档，步骤记录保留。' : '事项已恢复到待办。');
@@ -462,7 +470,9 @@ export default function App() {
     : selectedTask ? <TaskDetail task={selectedTask} busy={busy} onClose={closeDrawer} onEdit={() => startEdit(selectedTask)} onDelete={() => removeItem('task', selectedTask)}
       onToggleStep={(index, checked) => void operate(() => request('/api/tasks/' + selectedTask.id + '/steps', 'POST', { index, checked, version: selectedTask.version }))} onComplete={() => completeTask(selectedTask)} />
     : selectedEvent ? <EventDetail event={selectedEvent} date={selectedItem.date} busy={busy} onClose={closeDrawer} onEdit={() => startEventEdit(selectedEvent)} onDelete={() => removeItem('event', selectedEvent)}
-      onSkip={selectedEvent.repeat !== 'none' && selectedItem.date ? () => skipOccurrence(selectedEvent, selectedItem.date!) : undefined} />
+      skipped={!!selectedItem.skipped}
+      onSkip={selectedItem.date && !selectedItem.skipped ? () => skipOccurrence(selectedEvent, selectedItem.date!) : undefined}
+      onUnskip={selectedItem.date && selectedItem.skipped ? () => unskipOccurrence(selectedEvent, selectedItem.date!) : undefined} />
     : selectedQuota ? <QuotaDetail quota={selectedQuota} categoryName={quotaCategoryNames.get(selectedQuota.category) ?? ''} onClose={closeDrawer} onEdit={() => startQuotaEdit(selectedQuota)} onDelete={() => removeItem('quota', selectedQuota)} />
     : selectedSub ? <SubscriptionDetail sub={selectedSub} categoryName={categoryNames.get(selectedSub.category) ?? ''} onClose={closeDrawer} onEdit={() => startSubEdit(selectedSub)} onDelete={() => removeItem('subscription', selectedSub)} />
     : null;

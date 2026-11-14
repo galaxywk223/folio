@@ -4,7 +4,7 @@ import { request, dateTime } from '../api';
 import { Empty } from '../components';
 import type { Activity, Kind } from '../types';
 
-const actionLabels: Record<Activity['action'], string> = { create: '新建', update: '修改', delete: '移入回收站', restore: '恢复', skip: '跳过一次' };
+const actionLabels: Record<Activity['action'], string> = { create: '新建', update: '修改', delete: '移入回收站', restore: '恢复', skip: '跳过一次', unskip: '恢复一次' };
 const kindLabels: Record<string, string> = { task: '待办', event: '日程', quota: '额度', subscription: '订阅', note: '记录' };
 const fieldLabels: Record<string, string> = {
   title: '标题', dateText: '日期', bodyMarkdown: '正文', status: '状态', completedAt: '完成时间',
@@ -27,7 +27,7 @@ function show(value: unknown) {
 function changes(entry: Activity): [string, unknown, unknown][] {
   const before = entry.before || {}, after = entry.after || {};
   const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(key => !ignored.has(key));
-  if (entry.action === 'update' || entry.action === 'skip') {
+  if (entry.action === 'update' || entry.action === 'skip' || entry.action === 'unskip') {
     return keys.filter(key => JSON.stringify(before[key]) !== JSON.stringify(after[key])).map(key => [key, before[key], after[key]]);
   }
   const record = entry.after || entry.before || {};

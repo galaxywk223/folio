@@ -259,7 +259,8 @@ export function helpText(name?: string): string {
     '  folio update <类型> <id> --字段 值 …       只修改给出的字段（同样支持 --json）',
     '  folio delete <类型> <id>                   移入回收站',
     '  folio restore <类型> <id>                  从回收站恢复',
-    '  folio skip <日程id> --date YYYY-MM-DD      重复日程跳过某一次',
+    '  folio skip <日程id> --date YYYY-MM-DD      跳过某一次（重复、不重复的日程都行），不再提醒',
+    '  folio unskip <日程id> --date YYYY-MM-DD    恢复跳过的那一次',
     '  folio categories <quota|subscription>      分类列表（写入时 category 可以直接写分类名）',
     '  folio logo <类型> <id> <图片路径>           设置 logo（PNG/JPG/WebP/SVG/ICO，≤1 MB）；--remove 移除，恢复首字母',
     '  folio log [--limit 20] [--kind 类型]       改动记录',
@@ -316,10 +317,10 @@ export async function run(argv: string[]): Promise<unknown> {
       await client.call('POST', '/api/trash/' + spec.kind + '/' + encodeURIComponent(id) + '/restore')
       return findEntity(await client.state(), spec, id)
     }
-    case 'skip': {
+    case 'skip': case 'unskip': {
       const id = requireId(rest[0])
       if (typeof options.date !== 'string') throw new CliError('需要 --date YYYY-MM-DD。', 'BAD_DATE')
-      return client.call('POST', '/api/events/' + encodeURIComponent(id) + '/skip', { date: options.date })
+      return client.call('POST', '/api/events/' + encodeURIComponent(id) + '/' + command, { date: options.date })
     }
     case 'categories': {
       const spec = requireSpec(rest[0] ?? 'subscription')

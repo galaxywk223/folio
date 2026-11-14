@@ -133,3 +133,16 @@ test('logo sets an image from a file path, accepts id prefixes and --remove', as
   const log = (await folio(['log', '--kind', 'subscription', '--limit', '1'])).json()[0];
   assert.deepEqual([log.action, log.source, log.after.logo], ['update', 'cli', '']);
 });
+
+
+test('skip and unskip work on one-off events from the command line', async () => {
+  const gym = (await folio(['add', 'event', '--title', '健身：慢跑', '--date', '2026-11-23', '--start-time', '09:30'])).json();
+  const skipped = await folio(['skip', gym.id.slice(0, 8), '--date', '2026-11-23']);
+  assert.equal(skipped.code, 0, skipped.stderr);
+  assert.deepEqual(skipped.json().skippedDates, ['2026-11-23']);
+  assert.equal((await folio(['list', 'event', '--from', '2026-11-23', '--to', '2026-11-23'])).json().length, 0, 'skipped occurrence is not listed');
+  assert.deepEqual((await folio(['unskip', gym.id, '--date', '2026-11-23'])).json().skippedDates, []);
+  assert.match((await folio(['unskip', gym.id, '--date', '2026-11-23'])).error().error, /没有被跳过/);
+  assert.match((await folio(['help'])).stdout, /folio unskip/);
+  assert.deepEqual((await folio(['log', '--kind', 'event', '--limit', '2'])).json().map(row => row.action), ['unskip', 'skip']);
+});

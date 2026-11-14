@@ -273,7 +273,8 @@ function eventFields(input, current) {
   const repeatDays = repeat === 'weekly' ? weekdayList(pick('repeatDays') ?? []) : [];
   const repeatUntil = repeat === 'none' ? '' : optionalIsoDate(pick('repeatUntil') ?? '', '重复截止');
   if (repeatUntil && repeatUntil < date) throw new AppError('重复截止不能早于日期。');
-  const skippedDates = repeat === 'none' ? [] : dateList(pick('skippedDates') ?? []);
+  // 不重复的日程只能跳过它自己那天；改了日期，原来的跳过自然失效。
+  const skippedDates = dateList(pick('skippedDates') ?? []).filter(day => repeat !== 'none' || day === date);
   const reminderMinutes = reminderValue(pick('reminderMinutes'));
   if (reminderMinutes !== null && !startTime) throw new AppError('设置提醒需要先填写开始时间。');
   return {
@@ -293,7 +294,7 @@ function compareEvents(a, b) {
 }
 
 const WRITE_METHODS = ['insertTask', 'updateTask', 'toggleTaskStep', 'insertNote', 'updateNote', 'insertQuota', 'updateQuota',
-  'insertSubscription', 'updateSubscription', 'insertEvent', 'updateEvent', 'skipEventOccurrence', 'deleteEntity', 'restoreEntity'];
+  'insertSubscription', 'updateSubscription', 'insertEvent', 'updateEvent', 'skipEventOccurrence', 'unskipEventOccurrence', 'deleteEntity', 'restoreEntity'];
 
 export class Store {
   constructor(root) {
@@ -789,14 +790,22 @@ export class Store {
     this.record(action, 'event', current, record);
     return record;
   }
-  // 重复日程跳过某一天（例如这周家教取消），其余日子不变。
+  // 跳过某一次（例如这周家教取消、今天不去健身）。重复日程其余日子不变；不重复的日程只能跳过它自己那天。
   skipEventOccurrence(id, input) {
     const current = this.event(id);
     this.checkVersion(current, input?.version);
     const date = requiredDate(input?.date, '跳过日期');
-    if (current.repeat === 'none') throw new AppError('只有重复日程可以跳过某一次；不重复的日程请直接删除。');
+    if (current.skippedDates.includes(date)) return current;
     if (!occursOn(current, date)) throw new AppError(date + ' 这天没有这个日程。');
     return this.updateEvent(current.id, { skippedDates: [...current.skippedDates, date] }, 'skip');
+  }
+  // 恢复被跳过的某一次。
+  unskipEventOccurrence(id, input) {
+    const current = this.event(id);
+    this.checkVersion(current, input?.version);
+    const date = requiredDate(input?.date, '恢复日期');
+    if (!current.skippedDates.includes(date)) throw new AppError(date + ' 这一次没有被跳过。');
+    return this.updateEvent(current.id, { skippedDates: current.skippedDates.filter(day => day !== date) }, 'unskip');
   }
   deleteEntity(type, id, input = {}) {
     const table = ENTITY_TABLES[type];

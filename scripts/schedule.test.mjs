@@ -19,7 +19,7 @@ await build({
   },
   outfile: bundle, bundle: true, platform: 'node', format: 'esm', packages: 'external', logLevel: 'silent',
 });
-const { Store, startServer, occurrencesBetween, upcomingOccurrences, occursOn, dueReminders, reminderAt, repeatLabel } = await import(pathToFileURL(bundle).href);
+const { Store, startServer, occurrencesBetween, upcomingOccurrences, occursOn, dueReminders, reminderAt, repeatLabel, withSkipped } = await import(pathToFileURL(bundle).href);
 const stores = new Set();
 const root = () => path.join(scratch, crypto.randomUUID());
 function open(directory = root()) { const store = new Store(directory); stores.add(store); return store; }
@@ -119,8 +119,10 @@ test('skipping one occurrence, deleting and restoring events', () => {
   const skipped = store.skipEventOccurrence(weekly.id, { date: '2026-11-13' });
   assert.deepEqual(skipped.skippedDates, ['2026-11-13']);
   assert.deepEqual(dates(store.state().events, '2026-11-06', '2026-11-20'), ['2026-11-06', '2026-11-20']);
-  const single = store.insertEvent({ title: 'Once', date: '2026-11-06' });
-  assert.throws(() => store.skipEventOccurrence(single.id, { date: '2026-11-06' }), /只有重复日程/);
+  const unskipped = store.unskipEventOccurrence(weekly.id, { date: '2026-11-13' });
+  assert.deepEqual(unskipped.skippedDates, []);
+  assert.throws(() => store.unskipEventOccurrence(weekly.id, { date: '2026-11-13' }), /没有被跳过/);
+  let single = store.insertEvent({ title: 'Once', date: '2026-11-06' });
   store.deleteEntity('event', single.id, { version: single.version });
   assert.throws(() => store.event(single.id), /已移入回收站/);
   store.restoreEntity('event', single.id);
@@ -267,4 +269,38 @@ test('HTTP: events routes, source header, revision and activity', async () => {
     running.close();
     await closed;
   }
+});
+
+
+test('one-off events can be skipped, listed as skipped, restored, and un-skipped by rescheduling', () => {
+  const store = open();
+  const gym = store.insertEvent({ title: '健身', date: '2026-11-16', startTime: '09:30', reminderMinutes: 30 });
+  assert.throws(() => store.skipEventOccurrence(gym.id, { date: '2026-11-17' }), /这天没有这个日程/);
+  const skipped = store.skipEventOccurrence(gym.id, { date: '2026-11-16' });
+  assert.deepEqual(skipped.skippedDates, ['2026-11-16']);
+  assert.equal(store.skipEventOccurrence(gym.id, { date: '2026-11-16' }).version, skipped.version, 'skipping twice is a no-op');
+  assert.equal(occursOn(skipped, '2026-11-16'), false);
+  assert.deepEqual(upcomingOccurrences(store.state().events, '2026-11-14'), [], 'skipped one-off is not upcoming');
+  assert.equal(dueReminders(store.state().events, new Date(2026, 10, 16, 8, 0), new Date(2026, 10, 16, 10, 0)).length, 0, 'no reminder');
+
+  // 列表里仍然能看到，带 skipped 标记。
+  const listed = withSkipped(store.state().events, list => upcomingOccurrences(list, '2026-11-14'));
+  assert.deepEqual(listed.map(item => [item.event.id, item.date, item.skipped]), [[gym.id, '2026-11-16', true]]);
+  assert.deepEqual(listed[0].event.skippedDates, ['2026-11-16'], 'the original event is returned');
+
+  const restored = store.unskipEventOccurrence(gym.id, { date: '2026-11-16' });
+  assert.equal(occursOn(restored, '2026-11-16'), true);
+  assert.equal(withSkipped(store.state().events, list => upcomingOccurrences(list, '2026-11-14'))[0].skipped, false);
+
+  // 改期等于重新安排：原来的跳过失效。
+  store.skipEventOccurrence(gym.id, { date: '2026-11-16' });
+  const moved = store.updateEvent(gym.id, { date: '2026-11-18' });
+  assert.deepEqual(moved.skippedDates, []);
+  assert.equal(occursOn(moved, '2026-11-18'), true);
+  // 不改日期的编辑保留跳过。
+  store.skipEventOccurrence(gym.id, { date: '2026-11-18' });
+  assert.deepEqual(store.updateEvent(gym.id, { note: '腿' }).skippedDates, ['2026-11-18']);
+
+  assert.deepEqual(store.activity({ kind: 'event', limit: 6 }).map(row => row.action), ['update', 'skip', 'update', 'skip', 'unskip', 'skip']);
+  close(store);
 });

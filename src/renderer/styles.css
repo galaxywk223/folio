@@ -219,6 +219,10 @@ svg{vertical-align:middle;flex-shrink:0}
 .content-row.selected .row-icon:not(.done){color:var(--accent)}
 .row-content{flex:1;min-width:0}
 .content-row:has(.avatar-done) .row-content strong{color:var(--text-2)}
+.content-row.skipped .avatar{opacity:.45;filter:grayscale(.6)}
+.content-row.skipped .row-content strong{color:var(--text-3);text-decoration:line-through;text-decoration-color:var(--border-strong)}
+.content-row.skipped .row-metadata .badge:not(.skipped-badge){opacity:.6}
+.badge.skipped-badge{color:var(--text-2);background:var(--surface-3);border:1px dashed var(--border-strong)}
 .row-content strong{display:block;font-size:14px;font-weight:550;line-height:1.5;overflow-wrap:anywhere;color:var(--text)}
 .row-metadata{display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;margin-top:3px;font-size:12px;color:var(--text-3)}
 .meta-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}

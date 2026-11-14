@@ -27,7 +27,7 @@ export type EventDraft = {
   repeat: Repeat; repeatDays: number[]; repeatUntil: string; reminderMinutes: number | null; version?: number;
 };
 export type Activity = {
-  id: number; at: string; source: string; action: 'create' | 'update' | 'delete' | 'restore' | 'skip';
+  id: number; at: string; source: string; action: 'create' | 'update' | 'delete' | 'restore' | 'skip' | 'unskip';
   kind: Kind | 'note'; itemId: string; title: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null;
 };
 export type State = {
@@ -46,4 +46,5 @@ export type SubscriptionDraft = {
 };
 export type Backup = { id: string; filename: string; createdAt: string; size: number };
 export type Entity = Task | ApiQuota | Subscription | EventItem;
-export type Item = Selection & { title: string; subtitle: string; entity: Entity; group?: string };
+// skipped：这一次日程被跳过，列表里变灰显示。
+export type Item = Selection & { title: string; subtitle: string; entity: Entity; group?: string; skipped?: boolean };

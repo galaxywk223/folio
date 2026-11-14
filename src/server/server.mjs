@@ -48,6 +48,7 @@ export function createApp(store, options = {}) {
   app.post('/api/events', (req, res) => res.status(201).json(as(req, () => store.insertEvent(req.body))));
   app.patch('/api/events/:id', (req, res) => res.json(as(req, () => store.updateEvent(req.params.id, req.body))));
   app.post('/api/events/:id/skip', (req, res) => res.json(as(req, () => store.skipEventOccurrence(req.params.id, req.body))));
+  app.post('/api/events/:id/unskip', (req, res) => res.json(as(req, () => store.unskipEventOccurrence(req.params.id, req.body))));
   app.delete('/api/events/:id', (req, res) => { as(req, () => store.deleteEntity('event', req.params.id, req.body)); res.status(204).end(); });
   app.post('/api/tasks', (req, res) => res.status(201).json(as(req, () => store.insertTask(req.body))));
   app.patch('/api/tasks/:id', (req, res) => res.json(as(req, () => store.updateTask(req.params.id, req.body))));

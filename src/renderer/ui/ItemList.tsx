@@ -1,6 +1,6 @@
 import type { RefObject, UIEvent } from 'react';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-import { Archive, Bell, CalendarClock, CalendarDays, CalendarRange, Check, CheckCircle2, ChevronDown, Circle, CreditCard, History, KeyRound, ListChecks, Loader2, MapPin, Repeat2, Settings, Settings2, Sun, Trash2 } from 'lucide-react';
+import { Archive, Bell, CalendarClock, CalendarDays, CalendarOff, CalendarRange, Check, CheckCircle2, ChevronDown, Circle, CreditCard, History, KeyRound, ListChecks, Loader2, MapPin, Repeat2, Settings, Settings2, Sun, Trash2 } from 'lucide-react';
 import { getSteps } from '../../shared/markdown';
 import { timeRange } from '../../shared/schedule';
 import { dateTime } from '../api';
@@ -56,9 +56,10 @@ export function ItemList({ listRef, loaded, error, items, view, searching, selec
         const groupStart = !!item.group && (index === 0 || items[index - 1].group !== item.group);
         return <div key={item.kind + item.id + (item.date ?? '')}>
           {groupStart && <div className="list-group-label"><span>{item.group}</span></div>}
-          <button className={'content-row' + (selected ? ' selected' : '') + (urgent ? ' urgent' : '')} onClick={() => onChoose(item)} aria-pressed={selected}>
+          <button className={'content-row' + (selected ? ' selected' : '') + (urgent ? ' urgent' : '') + (item.skipped ? ' skipped' : '')} onClick={() => onChoose(item)} aria-pressed={selected}>
             <Avatar name={rowTitle(item)} logo={item.entity.logo} done={item.kind === 'task' && (item.entity as Task).status === 'completed'} />
             <span className="row-content"><strong>{rowTitle(item)}</strong><span className="row-metadata">
+              {item.skipped && <span className="badge skipped-badge"><CalendarOff size={12} />已跳过</span>}
               {inTrash ? <span>删除于 {dateTime(item.entity.deletedAt)}</span> : <RowMeta item={item} searching={searching} showCategory={showCategory} subscriptionCategories={subscriptionCategories} quotaCategories={quotaCategories} />}
             </span></span>
             {!inTrash && item.kind === 'quota' && <span className="row-side"><strong>{(item.entity as ApiQuota).balance || '—'}</strong>{(item.entity as ApiQuota).recordedAt && <small>{(item.entity as ApiQuota).recordedAt}</small>}</span>}

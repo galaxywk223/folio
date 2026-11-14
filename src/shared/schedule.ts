@@ -103,6 +103,23 @@ export function upcomingOccurrences<T extends ScheduleEvent>(events: readonly T[
   return result.sort(compareOccurrences)
 }
 
+/**
+ * 列表用：跳过的那几次也列出来，并标上 skipped，方便看到和恢复。
+ * compute 传 occurrencesBetween 或 upcomingOccurrences；命令行、提醒和计数仍用原函数，不算跳过的。
+ */
+export function withSkipped<T extends ScheduleEvent>(events: readonly T[], compute: (events: readonly T[]) => Occurrence<T>[]): (Occurrence<T> & { skipped: boolean })[] {
+  const originals = new Map<string, T>()
+  const unskipped = events.map(event => {
+    const copy = { ...event, skippedDates: [] }
+    originals.set(event.id, event)
+    return copy
+  })
+  return compute(unskipped).map(({ event, date }) => {
+    const original = originals.get(event.id) ?? event
+    return { event: original, date, skipped: original.skippedDates.includes(date) }
+  })
+}
+
 export function startAt(event: Pick<ScheduleEvent, 'startTime'>, date: string): Date | null {
   if (!event.startTime) return null
   const [hours, minutes] = event.startTime.split(':').map(Number)
