@@ -5,7 +5,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AlertCircle, Check, FileText, Plus, Save, X } from 'lucide-react';
 import { getSteps } from '../shared/markdown';
-import type { EditorValue } from './types';
+import type { EditorValue, LogoChange } from './types';
+import { LogoPicker } from './ui/Avatar';
 
 const StepContext = createContext<{ index: number; text: string; checked: boolean } | null>(null);
 export function Markdown({ body, onToggle, disabled = false }: { body: string; onToggle?: (index: number, checked: boolean) => void; disabled?: boolean }) {
@@ -46,23 +47,24 @@ export function Empty({ title, text, action, actionLabel = '新建', icon = <Fil
 }
 export type EditorHandle = { save: () => Promise<boolean> };
 export const Editor = forwardRef<EditorHandle, {
-  initial: EditorValue; kind: 'task' | 'note'; isNew: boolean; onSave: (value: EditorValue) => Promise<void>; onCancel: () => void; onDirty: (value: boolean) => void;
-}>(function Editor({ initial, kind, isNew, onSave, onCancel, onDirty }, ref) {
+  initial: EditorValue; kind: 'task' | 'note'; isNew: boolean; logo?: string; onSave: (value: EditorValue, logo: LogoChange) => Promise<void>; onCancel: () => void; onDirty: (value: boolean) => void;
+}>(function Editor({ initial, kind, isNew, logo = '', onSave, onCancel, onDirty }, ref) {
   const [title, setTitle] = useState(initial.title);
   const [dateText, setDateText] = useState(initial.dateText || '');
   const [body, setBody] = useState(initial.bodyMarkdown);
   const [preview, setPreview] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [logoChange, setLogoChange] = useState<LogoChange>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
-  const dirty = title !== initial.title || dateText !== (initial.dateText || '') || body !== initial.bodyMarkdown;
+  const dirty = title !== initial.title || dateText !== (initial.dateText || '') || body !== initial.bodyMarkdown || !!logoChange;
   useEffect(() => onDirty(dirty), [dirty, onDirty]);
   async function save() {
     if (saving) return false;
     if (kind === 'task' && !title.trim()) { setError('事项标题不能为空。'); return false; }
     setSaving(true); setError('');
     try {
-      await onSave({ title, dateText, bodyMarkdown: body, version: initial.version });
+      await onSave({ title, dateText, bodyMarkdown: body, version: initial.version }, logoChange);
       onDirty(false);
       return true;
     } catch (failure) { setError((failure as Error).message); return false; }
@@ -82,6 +84,7 @@ export const Editor = forwardRef<EditorHandle, {
       <div className="editor-heading"><label className="field-label" htmlFor="editor-body">正文</label><div className="segmented"><button className={!preview ? 'active' : ''} onClick={() => setPreview(false)}>编辑</button><button className={preview ? 'active' : ''} onClick={() => setPreview(true)}>预览</button></div></div>
       {preview ? <div className="input editor-preview">{body ? <Markdown body={body} /> : <p className="muted">正文为空</p>}</div> : <textarea ref={textarea} id="editor-body" className="input textarea" value={body} onChange={event => setBody(event.target.value)} placeholder="记录说明、检查步骤或相关链接…" spellCheck={false} disabled={saving} />}
       <div className="editor-help"><span>支持 Markdown</span>{kind === 'task' && <button className="text-button" onClick={addStep} disabled={saving}><Plus size={14} />添加检查步骤</button>}</div>
+      {kind === 'task' && <div className="editor-logo"><LogoPicker name={title} logo={logo} change={logoChange} disabled={saving} onChange={setLogoChange} /></div>}
       {error && <div className="inline-error" role="alert"><AlertCircle size={16} /><span>{error}</span></div>}
     </div>
     <div className="editor-footer"><span>{saving ? '正在保存…' : dirty ? '有未保存的修改' : '尚无修改'} <kbd>Ctrl S</kbd></span><button className="button primary" onClick={() => void save()} disabled={saving}><Save size={16} />{saving ? '保存中' : '保存'}</button></div>

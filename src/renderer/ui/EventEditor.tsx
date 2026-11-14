@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { AlertCircle, Save, X } from 'lucide-react';
 import { REMINDER_OPTIONS, WEEKDAY_NAMES, effectiveRepeatDays, reminderLabel } from '../../shared/schedule';
 import type { Repeat } from '../../shared/schedule';
-import type { EventDraft } from '../types';
+import type { EventDraft, LogoChange } from '../types';
+import { LogoPicker } from './Avatar';
 
 const repeatOptions: [Repeat, string][] = [['none', '不重复'], ['daily', '每天'], ['weekly', '每周']];
 // 周一在前。
@@ -12,14 +13,15 @@ function Field({ id, label, wide, children }: { id: string; label: string; wide?
   return <div className={'field' + (wide ? ' wide' : '')}><label className="field-label" htmlFor={id}>{label}</label>{children}</div>;
 }
 
-export function EventEditor({ initial, isNew, onSave, onCancel, onDirty }: {
-  initial: EventDraft; isNew: boolean;
-  onSave: (value: EventDraft) => Promise<void> | void; onCancel: () => void; onDirty: (value: boolean) => void;
+export function EventEditor({ initial, isNew, logo = '', onSave, onCancel, onDirty }: {
+  initial: EventDraft; isNew: boolean; logo?: string;
+  onSave: (value: EventDraft, logo: LogoChange) => Promise<void> | void; onCancel: () => void; onDirty: (value: boolean) => void;
 }) {
   const [draft, setDraft] = useState(initial);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
+  const [logoChange, setLogoChange] = useState<LogoChange>(null);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(initial) || !!logoChange;
   useEffect(() => onDirty(dirty), [dirty, onDirty]);
   const set = <K extends keyof EventDraft>(key: K, value: EventDraft[K]) => setDraft(current => ({ ...current, [key]: value }));
 
@@ -36,7 +38,7 @@ export function EventEditor({ initial, isNew, onSave, onCancel, onDirty }: {
     if (!draft.title.trim()) { setError('日程标题不能为空。'); return; }
     if (!draft.date) { setError('请选择日期。'); return; }
     setSaving(true); setError('');
-    try { await onSave(draft); onDirty(false); }
+    try { await onSave(draft, logoChange); onDirty(false); }
     catch (failure) { setError((failure as Error).message); }
     finally { setSaving(false); }
   }
@@ -66,6 +68,7 @@ export function EventEditor({ initial, isNew, onSave, onCancel, onDirty }: {
         </select>
       </Field>
       <Field id="e-note" label="备注" wide><textarea id="e-note" className="input textarea short" value={draft.note} disabled={saving} onChange={e => set('note', e.target.value)} /></Field>
+      <LogoPicker name={draft.title} logo={logo} change={logoChange} disabled={saving} onChange={setLogoChange} />
     </div>
       {error && <div className="inline-error" role="alert"><AlertCircle size={16} /><span>{error}</span></div>}
     </div>

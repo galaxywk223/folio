@@ -7,6 +7,7 @@ import { dateTime } from '../api';
 import { Empty } from '../components';
 import { expiryClass, expiryLabel, expiryUrgent } from '../format';
 import type { CategoryNav } from './Sidebar';
+import { Avatar } from './Avatar';
 import type { ApiQuota, EventItem, Item, Selection, Subscription, Task, View } from '../types';
 
 const emptyCopy: Record<View, { title: string; text: string }> = {
@@ -56,11 +57,7 @@ export function ItemList({ listRef, loaded, error, items, view, searching, selec
         return <div key={item.kind + item.id + (item.date ?? '')}>
           {groupStart && <div className="list-group-label"><span>{item.group}</span></div>}
           <button className={'content-row' + (selected ? ' selected' : '') + (urgent ? ' urgent' : '')} onClick={() => onChoose(item)} aria-pressed={selected}>
-            {item.kind === 'quota' || item.kind === 'subscription'
-              ? <Avatar name={rowTitle(item)} />
-              : <span className={'row-icon ' + item.kind + (item.kind === 'task' && (item.entity as Task).status === 'completed' ? ' done' : '')}>
-                {item.kind === 'task' ? ((item.entity as Task).status === 'completed' ? <CheckCircle2 size={18} /> : <Circle size={18} />) : <CalendarClock size={17} />}
-              </span>}
+            <Avatar name={rowTitle(item)} logo={item.entity.logo} done={item.kind === 'task' && (item.entity as Task).status === 'completed'} />
             <span className="row-content"><strong>{rowTitle(item)}</strong><span className="row-metadata">
               {inTrash ? <span>删除于 {dateTime(item.entity.deletedAt)}</span> : <RowMeta item={item} searching={searching} showCategory={showCategory} subscriptionCategories={subscriptionCategories} quotaCategories={quotaCategories} />}
             </span></span>
@@ -90,16 +87,6 @@ function CategoryDropdown({ nav }: { nav: CategoryNav }) {
       <DropdownMenu.Item className="dropdown-item" onSelect={nav.onManage}><Settings2 size={14} />管理分类</DropdownMenu.Item>
     </DropdownMenu.Content></DropdownMenu.Portal>
   </DropdownMenu.Root>;
-}
-
-// 首字母头像：颜色由名字决定，同一个服务每次都是同一个颜色。
-const AVATAR_TONES = 8;
-function Avatar({ name }: { name: string }) {
-  const text = name.trim();
-  let hash = 0;
-  for (const char of text) hash = (hash * 31 + char.codePointAt(0)!) >>> 0;
-  const first = [...text][0] ?? '?';
-  return <span className={'avatar tone-' + (hash % AVATAR_TONES)} aria-hidden="true">{/[a-z]/i.test(first) ? first.toUpperCase() : first}</span>;
 }
 
 function SubscriptionSide({ sub }: { sub: Subscription }) {

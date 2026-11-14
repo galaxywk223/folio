@@ -7,6 +7,7 @@ import { dateTime, openExternal } from '../api';
 import { Markdown } from '../components';
 import { expiryClass, expiryLabel } from '../format';
 import type { ApiQuota, EventItem, Item, Subscription, Task } from '../types';
+import { Avatar } from './Avatar';
 
 export function DetailToolbar({ caption, onClose, onEdit, onDelete }: { caption: string; onClose: () => void; onEdit?: () => void; onDelete?: () => void }) {
   return <div className="detail-toolbar">
@@ -17,6 +18,10 @@ export function DetailToolbar({ caption, onClose, onEdit, onDelete }: { caption:
       {onDelete && <DropdownMenu.Root><DropdownMenu.Trigger className="icon-button" aria-label="更多操作"><MoreHorizontal size={18} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="dropdown" sideOffset={6} align="end"><DropdownMenu.Item className="dropdown-item destructive" onSelect={onDelete}><Trash2 size={15} />移入回收站</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>}
     </div>
   </div>;
+}
+
+function DetailTitle({ name, logo, done }: { name: string; logo: string; done?: boolean }) {
+  return <div className="detail-heading"><Avatar name={name} logo={logo} size="lg" done={done} /><h2 className="detail-title">{name}</h2></div>;
 }
 
 function Progress({ body }: { body: string }) {
@@ -41,7 +46,7 @@ export function TaskDetail({ task, busy, onClose, onEdit, onDelete, onToggleStep
   return <div className="detail-layout">
     <DetailToolbar caption="事项详情" onClose={onClose} onEdit={onEdit} onDelete={onDelete} />
     <div className="detail-scroll">
-      <h2 className="detail-title">{task.title}</h2>
+      <DetailTitle name={task.title} logo={task.logo} done={done} />
       <div className="detail-meta">
         {task.dateText && <span className="badge accent"><CalendarDays size={13} />{task.dateText}</span>}
         <span className={'badge' + (done ? ' success' : '')}>{done ? <><CheckCircle2 size={13} />已完成 · {dateTime(task.completedAt)}</> : '待处理'}</span>
@@ -60,7 +65,7 @@ export function QuotaDetail({ quota, categoryName, onClose, onEdit, onDelete }: 
   return <div className="detail-layout">
     <DetailToolbar caption="额度" onClose={onClose} onEdit={onEdit} onDelete={onDelete} />
     <div className="detail-scroll">
-      <h2 className="detail-title">{quota.platform}</h2>
+      <DetailTitle name={quota.platform} logo={quota.logo} />
       <div className="detail-meta"><span className="badge accent">{categoryName}</span><span className="badge">{quota.kind}</span>{quota.account && <span className="badge">{quota.account}</span>}{quota.recordedAt && <span className="badge"><CalendarDays size={13} />记录于 {quota.recordedAt}</span>}</div>
       <div className="hero-value"><span>余额</span><strong>{quota.balance || '—'}</strong></div>
       <PropertyList rows={[['备注', quota.note]]} />
@@ -73,7 +78,7 @@ export function SubscriptionDetail({ sub, categoryName, onClose, onEdit, onDelet
   return <div className="detail-layout">
     <DetailToolbar caption="订阅" onClose={onClose} onEdit={onEdit} onDelete={onDelete} />
     <div className="detail-scroll">
-      <h2 className="detail-title">{sub.service}</h2>
+      <DetailTitle name={sub.service} logo={sub.logo} />
       <div className="detail-meta">
         <span className="badge accent">{categoryName}</span>
         {sub.account && <span className="badge">{sub.account}</span>}
@@ -95,7 +100,7 @@ export function EventDetail({ event, date, busy, onClose, onEdit, onDelete, onSk
   return <div className="detail-layout">
     <DetailToolbar caption="日程" onClose={onClose} onEdit={onEdit} onDelete={onDelete} />
     <div className="detail-scroll">
-      <h2 className="detail-title">{event.title}</h2>
+      <DetailTitle name={event.title} logo={event.logo} />
       <div className="detail-meta">
         <span className="badge accent"><CalendarDays size={13} />{shownDate} {weekdayLabel(shownDate)}</span>
         <span className="badge"><Clock size={13} />{timeRange(event)}</span>
@@ -120,7 +125,7 @@ export function TrashDetail({ item, busy, onClose, onRestore }: { item: Item; bu
   return <div className="detail-layout">
     <DetailToolbar caption="回收站内容" onClose={onClose} />
     <div className="detail-scroll">
-      <h2 className="detail-title">{item.title}</h2>
+      <DetailTitle name={item.title} logo={item.entity.logo} />
       <div className="detail-meta"><span className="badge danger"><Trash2 size={13} />删除于 {dateTime(item.entity.deletedAt)}</span></div>
       {'bodyMarkdown' in item.entity && <Markdown body={item.entity.bodyMarkdown} />}
       <div className="callout"><ArchiveRestore size={18} /><p>正文与步骤状态均保留。</p></div>

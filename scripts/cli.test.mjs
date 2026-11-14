@@ -113,3 +113,23 @@ test('errors go to stderr as JSON with exit code 1', async () => {
   assert.equal(offline.code, 1);
   assert.equal(offline.error().code, 'NOT_RUNNING');
 });
+
+
+test('logo sets an image from a file path, accepts id prefixes and --remove', async () => {
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+  const file = path.join(scratch, 'logo.png');
+  fs.writeFileSync(file, png);
+  const sub = (await folio(['add', 'subscription', '--service', 'Logo CLI'])).json();
+  const set = await folio(['logo', 'subscription', sub.id.slice(0, 8), file]);
+  assert.equal(set.code, 0, set.stderr);
+  assert.match(set.json().logo, /^[0-9a-f]{64}\.png$/);
+  assert.equal((await folio(['get', 'subscription', sub.id])).json().logo, set.json().logo);
+  assert.match((await folio(['help', 'task'])).stdout, /folio logo task/);
+  const missing = await folio(['logo', 'subscription', sub.id, path.join(scratch, 'absent.png')]);
+  assert.equal(missing.error().code, 'FILE_NOT_FOUND');
+  assert.equal((await folio(['logo', 'subscription', sub.id])).error().code, 'MISSING_FILE');
+  const removed = await folio(['logo', 'subscription', sub.id, '--remove']);
+  assert.equal(removed.json().logo, '');
+  const log = (await folio(['log', '--kind', 'subscription', '--limit', '1'])).json()[0];
+  assert.deepEqual([log.action, log.source, log.after.logo], ['update', 'cli', '']);
+});

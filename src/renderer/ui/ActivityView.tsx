@@ -11,7 +11,7 @@ const fieldLabels: Record<string, string> = {
   date: '日期', startTime: '开始', endTime: '结束', location: '地点', note: '备注', repeat: '重复', repeatDays: '重复星期',
   repeatUntil: '重复到', skippedDates: '跳过日期', reminderMinutes: '提醒（分钟）',
   kind: '类型', category: '分类', platform: '平台', account: '账号', entryUrl: '入口', balance: '余额', recordedAt: '记录日期',
-  service: '服务', plan: '套餐', benefits: '权益', cost: '费用', expiresAt: '到期日', autoRenew: '自动续费', deletedAt: '删除时间',
+  service: '服务', plan: '套餐', benefits: '权益', cost: '费用', expiresAt: '到期日', autoRenew: '自动续费', deletedAt: '删除时间', logo: 'Logo',
 };
 const ignored = new Set(['id', 'createdAt', 'updatedAt', 'version', 'sortOrder']);
 

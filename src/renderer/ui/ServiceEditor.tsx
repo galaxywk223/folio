@@ -1,26 +1,29 @@
 import { useEffect, useState } from 'react';
 import { AlertCircle, Save, X } from 'lucide-react';
 import type { SubscriptionCategory } from '../../shared/subscriptions';
-import type { QuotaDraft, SubscriptionDraft } from '../types';
+import type { LogoChange, QuotaDraft, SubscriptionDraft } from '../types';
+import { LogoPicker } from './Avatar';
 
 
 function Field({ id, label, wide, children }: { id: string; label: string; wide?: boolean; children: React.ReactNode }) {
   return <div className={'field' + (wide ? ' wide' : '')}><label className="field-label" htmlFor={id}>{label}</label>{children}</div>;
 }
 
-export function ServiceEditor({ kind, initial, isNew, categories, onSave, onCancel, onDirty }: {
+export function ServiceEditor({ kind, initial, isNew, categories, logo = '', onSave, onCancel, onDirty }: {
   kind: 'quota' | 'subscription';
   initial: QuotaDraft | SubscriptionDraft;
   isNew: boolean;
   categories?: SubscriptionCategory[];
-  onSave: (value: QuotaDraft | SubscriptionDraft) => Promise<void> | void;
+  logo?: string;
+  onSave: (value: QuotaDraft | SubscriptionDraft, logo: LogoChange) => Promise<void> | void;
   onCancel: () => void;
   onDirty: (value: boolean) => void;
 }) {
   const [draft, setDraft] = useState(initial);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
+  const [logoChange, setLogoChange] = useState<LogoChange>(null);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(initial) || !!logoChange;
   useEffect(() => onDirty(dirty), [dirty, onDirty]);
   function setField(key: string, value: string | boolean | null) {
     setDraft(current => ({ ...current, [key]: value }));
@@ -30,7 +33,7 @@ export function ServiceEditor({ kind, initial, isNew, categories, onSave, onCanc
     if (kind === 'quota' && !(draft as QuotaDraft).platform.trim()) { setError('平台名称不能为空。'); return; }
     if (kind === 'subscription' && !(draft as SubscriptionDraft).service.trim()) { setError('服务名称不能为空。'); return; }
     setSaving(true); setError('');
-    try { await onSave(draft); onDirty(false); }
+    try { await onSave(draft, logoChange); onDirty(false); }
     catch (failure) { setError((failure as Error).message); }
     finally { setSaving(false); }
   }
@@ -76,6 +79,7 @@ export function ServiceEditor({ kind, initial, isNew, categories, onSave, onCanc
         <Field id="s-url" label="入口 URL" wide>{text('s-url', 'entryUrl', sub.entryUrl, { placeholder: 'https://' })}</Field>
         <Field id="s-note" label="备注" wide><textarea id="s-note" className="input textarea short" value={sub.note} onChange={e => setField('note', e.target.value)} disabled={saving} /></Field>
       </>}
+      <LogoPicker name={kind === 'quota' ? quota.platform : sub.service} logo={logo} change={logoChange} disabled={saving} onChange={setLogoChange} />
     </div>
       {error && <div className="inline-error" role="alert"><AlertCircle size={16} /><span>{error}</span></div>}
     </div>

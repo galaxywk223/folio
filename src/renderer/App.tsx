@@ -7,7 +7,7 @@ import { daysUntil, request } from './api';
 import { Confirm, Editor, Empty } from './components';
 import type { Confirmation, EditorHandle } from './components';
 import { parseBalance } from './format';
-import type { ApiQuota, Entity, EditorValue, EventDraft, EventItem, Item, Kind, QuotaDraft, Selection, State, Subscription, SubscriptionDraft, Task, View } from './types';
+import type { ApiQuota, Entity, EditorValue, EventDraft, EventItem, Item, Kind, LogoChange, QuotaDraft, Selection, State, Subscription, SubscriptionDraft, Task, View } from './types';
 import { ActivityView } from './ui/ActivityView';
 import { CategoryManager } from './ui/CategoryManager';
 import { EventDetail, QuotaDetail, SubscriptionDetail, TaskDetail, TrashDetail } from './ui/Details';
@@ -356,32 +356,45 @@ export default function App() {
       setDrawerOpen(true);
     });
   }
-  async function saveEditor(value: EditorValue) {
+  // 条目先保存，再上传或移除 logo；新建的条目这时才有 id。
+  async function applyLogo(route: string, id: string, change: LogoChange) {
+    if (!change) return;
+    if ('remove' in change) { await request(route + '/' + id + '/logo', 'DELETE'); return; }
+    const form = new FormData();
+    form.append('logo', change.file, change.file.name);
+    try { await request(route + '/' + id + '/logo', 'PUT', form); }
+    catch (failure) { throw new Error('内容已保存，但 logo 没有设置成功：' + (failure as Error).message); }
+  }
+  async function saveEditor(value: EditorValue, logo: LogoChange = null) {
     if (!editing || editing.kind !== 'task') return;
     const record = await request<Task>('/api/tasks' + (editing.id ? '/' + editing.id : ''), editing.id ? 'PATCH' : 'POST', value);
+    await applyLogo('/api/tasks', record.id, logo);
     setEditing(null); setDirty(false); setQuery(''); setView(record.status);
     setSelection({ kind: 'task', id: record.id }); setNotice('已保存');
     void load().catch(failure => setError('内容已经保存，列表刷新失败：' + failure.message));
   }
-  async function saveQuota(value: QuotaDraft) {
+  async function saveQuota(value: QuotaDraft, logo: LogoChange = null) {
     if (!editing || editing.kind !== 'quota') return;
     const record = await request<ApiQuota>('/api/quotas' + (editing.id ? '/' + editing.id : ''), editing.id ? 'PATCH' : 'POST', value);
+    await applyLogo('/api/quotas', record.id, logo);
     setEditing(null); setDirty(false); setQuery(''); setView('quotas');
     if (quotaFilter !== 'all' && quotaFilter !== record.category) setQuotaFilter(record.category);
     setSelection({ kind: 'quota', id: record.id }); setNotice('已保存');
     void load().catch(failure => setError('内容已经保存，列表刷新失败：' + failure.message));
   }
-  async function saveSubscription(value: SubscriptionDraft) {
+  async function saveSubscription(value: SubscriptionDraft, logo: LogoChange = null) {
     if (!editing || editing.kind !== 'subscription') return;
     const record = await request<Subscription>('/api/subscriptions' + (editing.id ? '/' + editing.id : ''), editing.id ? 'PATCH' : 'POST', value);
+    await applyLogo('/api/subscriptions', record.id, logo);
     setEditing(null); setDirty(false); setQuery(''); setView('subscriptions');
     if (subscriptionFilter !== 'all' && subscriptionFilter !== record.category) setSubscriptionFilter(record.category);
     setSelection({ kind: 'subscription', id: record.id }); setNotice('已保存');
     void load().catch(failure => setError('内容已经保存，列表刷新失败：' + failure.message));
   }
-  async function saveEvent(value: EventDraft) {
+  async function saveEvent(value: EventDraft, logo: LogoChange = null) {
     if (!editing || editing.kind !== 'event') return;
     const record = await request<EventItem>('/api/events' + (editing.id ? '/' + editing.id : ''), editing.id ? 'PATCH' : 'POST', value);
+    await applyLogo('/api/events', record.id, logo);
     const next = upcomingOccurrences([record], today)[0]?.date;
     setEditing(null); setDirty(false); setQuery(''); setNotice('已保存');
     if (next) { setView(view === 'today' && next === today ? 'today' : 'schedule'); setSelection({ kind: 'event', id: record.id, date: next }); }
@@ -435,10 +448,15 @@ export default function App() {
     : view === 'quotas' ? { label: '新额度', run: () => startQuotaEdit() }
     : view === 'subscriptions' ? { label: '新订阅', run: () => startSubEdit() } : null;
 
-  const detail = editing?.kind === 'quota' ? <ServiceEditor kind="quota" categories={state?.quotaCategories} initial={editing.initial} isNew={!editing.id} onSave={value => saveQuota(value as QuotaDraft)} onCancel={() => guarded(() => {})} onDirty={setDirty} />
-    : editing?.kind === 'subscription' ? <ServiceEditor kind="subscription" categories={state?.subscriptionCategories} initial={editing.initial} isNew={!editing.id} onSave={value => saveSubscription(value as SubscriptionDraft)} onCancel={() => guarded(() => {})} onDirty={setDirty} />
-    : editing?.kind === 'event' ? <EventEditor key={'event' + (editing.id || '-new')} initial={editing.initial} isNew={!editing.id} onSave={saveEvent} onCancel={() => guarded(() => {})} onDirty={setDirty} />
-    : editing?.kind === 'task' ? <Editor key={'task' + (editing.id || '-new')} ref={editorRef} initial={editing.initial} kind="task" isNew={!editing.id} onSave={saveEditor} onDirty={setDirty} onCancel={() => guarded(() => {})} />
+  const editingLogo = (() => {
+    if (!editing?.id || !state) return '';
+    const lists: Record<Kind, Entity[]> = { task: state.tasks, event: state.events, quota: state.quotas, subscription: state.subscriptions };
+    return lists[editing.kind].find(item => item.id === editing.id)?.logo ?? '';
+  })();
+  const detail = editing?.kind === 'quota' ? <ServiceEditor kind="quota" categories={state?.quotaCategories} initial={editing.initial} isNew={!editing.id} logo={editingLogo} onSave={(value, logo) => saveQuota(value as QuotaDraft, logo)} onCancel={() => guarded(() => {})} onDirty={setDirty} />
+    : editing?.kind === 'subscription' ? <ServiceEditor kind="subscription" categories={state?.subscriptionCategories} initial={editing.initial} isNew={!editing.id} logo={editingLogo} onSave={(value, logo) => saveSubscription(value as SubscriptionDraft, logo)} onCancel={() => guarded(() => {})} onDirty={setDirty} />
+    : editing?.kind === 'event' ? <EventEditor key={'event' + (editing.id || '-new')} initial={editing.initial} isNew={!editing.id} logo={editingLogo} onSave={saveEvent} onCancel={() => guarded(() => {})} onDirty={setDirty} />
+    : editing?.kind === 'task' ? <Editor key={'task' + (editing.id || '-new')} ref={editorRef} initial={editing.initial} kind="task" isNew={!editing.id} logo={editingLogo} onSave={saveEditor} onDirty={setDirty} onCancel={() => guarded(() => {})} />
     : !selectedItem ? <Empty title="选择一项查看详情" text="说明、检查步骤与服务信息会显示在这里。" icon={<FileText size={26} />} />
     : view === 'trash' && !searching ? <TrashDetail item={selectedItem} busy={busy} onClose={closeDrawer} onRestore={() => void operate(() => request('/api/trash/' + selectedItem.kind + '/' + selectedItem.id + '/restore', 'POST'), '已从回收站恢复')} />
     : selectedTask ? <TaskDetail task={selectedTask} busy={busy} onClose={closeDrawer} onEdit={() => startEdit(selectedTask)} onDelete={() => removeItem('task', selectedTask)}

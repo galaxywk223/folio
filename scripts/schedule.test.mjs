@@ -83,7 +83,7 @@ test('reminder times handle lead minutes, midnight crossing and window boundarie
 
 test('events validate input, default fields and keep omitted values on update', () => {
   const store = open();
-  assert.equal(schemaVersion(store), '9');
+  assert.equal(schemaVersion(store), '10');
   const created = store.insertEvent({ title: ' 家教 ', date: '2026-11-06', startTime: '9:05', endTime: '21:00', repeat: 'weekly', repeatDays: '5,6', reminderMinutes: '90' });
   assert.equal(created.title, '家教');
   assert.equal(created.startTime, '09:05');
@@ -168,7 +168,7 @@ test('ambiguous short ids are rejected with candidates', () => {
   close(store);
 });
 
-test('version 8 databases upgrade to 9 with data intact and empty event tables', () => {
+test('version 8 databases upgrade to 10 with data intact and empty event tables', () => {
   const store = open();
   const task = store.insertTask({ title: 'Kept' });
   const { root: directory, dbPath } = store;
@@ -177,7 +177,7 @@ test('version 8 databases upgrade to 9 with data intact and empty event tables',
   db.exec("DROP TABLE events; DROP TABLE activity_log; UPDATE settings SET value='8' WHERE key='schema_version';");
   db.close();
   const upgraded = open(directory);
-  assert.equal(schemaVersion(upgraded), '9');
+  assert.equal(schemaVersion(upgraded), '10');
   assert.deepEqual(upgraded.state().events, []);
   assert.equal(upgraded.task(task.id).title, 'Kept');
   assert.deepEqual(upgraded.activity(), []);
@@ -209,7 +209,7 @@ test('backups keep events and the activity log; version 8 backups restore with n
   db.exec("DROP TABLE events; DROP TABLE activity_log; UPDATE settings SET value='8' WHERE key='schema_version';");
   db.close();
   await target.restoreBackup(backupBytes(legacyPath, 8));
-  assert.equal(schemaVersion(target), '9');
+  assert.equal(schemaVersion(target), '10');
   assert.deepEqual(target.state().events, []);
   assert.equal(target.state().tasks[0].title, 'From v8');
   const after = target.insertEvent({ title: 'New after restore', date: '2026-11-07' });
@@ -224,7 +224,7 @@ test('backups keep events and the activity log; version 8 backups restore with n
   raw.exec("UPDATE events SET repeat_rule='monthly'");
   raw.close();
   const snapshot = target.state();
-  await assert.rejects(target.restoreBackup(backupBytes(badPath, 9)), /备份日程字段校验失败/);
+  await assert.rejects(target.restoreBackup(backupBytes(badPath, 10)), /备份日程字段校验失败/);
   assert.deepEqual(target.state(), snapshot);
   close(target);
 });

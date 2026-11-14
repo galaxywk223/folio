@@ -132,6 +132,29 @@ class Client {
     return response.status === 204 ? undefined as T : await response.json() as T
   }
   state() { return this.call<State>('GET', '/api/state') }
+  async upload<T>(method: string, route: string, field: string, filename: string, bytes: Uint8Array<ArrayBuffer>): Promise<T> {
+    const form = new FormData()
+    form.append(field, new Blob([bytes]), filename)
+    const response = await fetch(this.base + route, { method, headers: { 'X-Folio-App': '1', 'X-Folio-Source': 'cli' }, body: form })
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({})) as { error?: string; code?: string }
+      throw new CliError(data.error || '请求失败（HTTP ' + response.status + '）。', data.code || 'HTTP_' + response.status)
+    }
+    return await response.json() as T
+  }
+}
+
+// folio logo <类型> <id> <图片路径>，或 --remove 移除。
+async function setLogo(client: Client, spec: KindSpec, id: string, file: string | undefined, remove: boolean) {
+  const record = findEntity(await client.state(), spec, id)
+  const route = '/api/' + spec.route + '/' + encodeURIComponent(record.id) + '/logo'
+  if (remove) return client.call('DELETE', route)
+  if (!file) throw new CliError('需要图片路径：folio logo ' + spec.kind + ' <id> <图片路径>；移除用 --remove。', 'MISSING_FILE')
+  const absolute = path.resolve(process.cwd(), file)
+  let bytes: Uint8Array<ArrayBuffer>
+  try { bytes = new Uint8Array(fs.readFileSync(absolute)) }
+  catch { throw new CliError('读不到图片文件：' + absolute, 'FILE_NOT_FOUND') }
+  return client.upload('PUT', route, 'logo', path.basename(absolute), bytes)
 }
 
 // ---------- 命令 ----------
@@ -216,6 +239,7 @@ export function helpText(name?: string): string {
     for (const field of spec.fields) {
       lines.push('  ' + field.name + (field.required ? '（必填）' : '') + ' — ' + field.label + '。' + (field.values ? '可选值：' + field.values.join(' / ') + '。' : '') + (field.note ? field.note + '。' : '') + (field.example ? '例：' + JSON.stringify(field.example) : ''))
     }
+    lines.push('', 'logo：不能用 --字段 写，用 folio logo ' + spec.kind + ' <id> <图片路径> 设置，--remove 移除。支持 PNG、JPG、WebP、SVG、ICO，最大 1 MB；没设置时显示首字母。')
     return lines.join('\n')
   }
   return [
@@ -237,6 +261,7 @@ export function helpText(name?: string): string {
     '  folio restore <类型> <id>                  从回收站恢复',
     '  folio skip <日程id> --date YYYY-MM-DD      重复日程跳过某一次',
     '  folio categories <quota|subscription>      分类列表（写入时 category 可以直接写分类名）',
+    '  folio logo <类型> <id> <图片路径>           设置 logo（PNG/JPG/WebP/SVG/ICO，≤1 MB）；--remove 移除，恢复首字母',
     '  folio log [--limit 20] [--kind 类型]       改动记录',
     '',
     '说明：',
@@ -249,6 +274,7 @@ export function helpText(name?: string): string {
     '  folio add event --title "家教：初一数学" --date 2026-11-07 --start-time 19:00 --end-time 21:00 --location 铁城村4栋 --repeat weekly --repeat-days 5 --reminder-minutes 90',
     '  folio add task --title "提交推免材料" --date-text "2026-11-10 17:00前"',
     '  folio list event --from 2026-11-01 --to 2026-11-30',
+    '  folio logo subscription 2699d9a8 ./logos/claude.png',
   ].join('\n')
 }
 
@@ -300,6 +326,10 @@ export async function run(argv: string[]): Promise<unknown> {
       if (spec.kind !== 'quota' && spec.kind !== 'subscription') throw new CliError('只有 quota 和 subscription 有分类。', 'UNKNOWN_KIND')
       const state = await client.state()
       return spec.kind === 'quota' ? state.quotaCategories : state.subscriptionCategories
+    }
+    case 'logo': {
+      const spec = requireSpec(rest[0])
+      return setLogo(client, spec, requireId(rest[1]), rest[2], options.remove === true)
     }
     case 'log': case 'activity': {
       const params = new URLSearchParams({ limit: typeof options.limit === 'string' ? options.limit : '20' })

@@ -29,7 +29,8 @@ function open(directory = root()) {
   return store;
 }
 function close(store) { store.close(); stores.delete(store); }
-function rawRows(db, table) { return db.prepare('SELECT * FROM ' + table + ' ORDER BY rowid').all().map(row => ({ ...row })); }
+// 比较迁移前后的原有字段；第 10 版新增的 logo 列单独测试。
+function rawRows(db, table) { return db.prepare('SELECT * FROM ' + table + ' ORDER BY rowid').all().map(({ logo, ...row }) => ({ ...row })); }
 // 把额度表还原成 v7 之前的结构：固定 CHECK 分类、没有 quota_categories。
 function downgradeQuotaTable(db) {
   const columns = 'id,kind,category,platform,account,entry_url,balance,recorded_at,note,created_at,updated_at,deleted_at,version';
@@ -84,7 +85,7 @@ after(() => {
 test('new databases stay empty across startup and new subscriptions default to other/unrecorded', () => {
   let store = open();
   const directory = store.root;
-  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '9');
+  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '10');
   assert.deepEqual(store.state().subscriptions, []);
   assert.deepEqual(store.state().quotas, []);
   close(store);
@@ -122,7 +123,7 @@ test('version 2 migration preserves existing rows including recycle-bin metadata
 test('version 3 migration adds quota categories as AI and keeps subscriptions unchanged', () => {
   const fixture = legacyFixture(3);
   let store = open(fixture.directory);
-  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '9');
+  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '10');
   assert.deepEqual(rawRows(store.db, 'subscriptions'), fixture.subscriptions);
   const quotas = rawRows(store.db, 'api_quotas');
   assert.deepEqual(quotas.map(({ category, account, ...row }) => row), fixture.quotas);
@@ -210,7 +211,7 @@ function assertAccountMigration(rows, originals) {
 test('version 4 migration moves exactly one standalone account line out of quota notes', () => {
   const fixture = v4QuotaFixture(accountNotes);
   const store = open(fixture.directory);
-  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '9');
+  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '10');
   assertAccountMigration(rawRows(store.db, 'api_quotas'), fixture.rows);
   assert.ok(store.quota(fixture.quotas.at(-1).id, true).deletedAt, 'trashed quota stays in recycle bin');
   close(store);
@@ -256,7 +257,7 @@ test('version 4 backups migrate quota accounts on restore with the same rules', 
   const fixture = v4QuotaFixture(accountNotes);
   const target = open();
   await target.restoreBackup(backupBytes(fixture.dbPath, 4));
-  assert.equal(target.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '9');
+  assert.equal(target.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '10');
   assertAccountMigration(rawRows(target.db, 'api_quotas'), fixture.rows);
   close(target);
 });
@@ -281,7 +282,7 @@ test('version 1 migration preserves tasks and creates empty service tables', () 
   assert.deepEqual(rawRows(store.db, 'tasks'), fixture.tasks);
   assert.deepEqual(store.state().subscriptions, []);
   assert.deepEqual(store.state().quotas, []);
-  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '9');
+  assert.equal(store.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '10');
   close(store);
 });
 
@@ -361,7 +362,7 @@ test('current version backups retain service fields, tasks and attachments; corr
   const backup = await source.createBackup();
   const bytes = new Uint8Array(fs.readFileSync(source.backupPath(backup.id)));
   const entries = unzipSync(bytes);
-  assert.equal(JSON.parse(strFromU8(entries['manifest.json'])).schemaVersion, 9);
+  assert.equal(JSON.parse(strFromU8(entries['manifest.json'])).schemaVersion, 10);
   const target = open();
   await target.restoreBackup(bytes);
   assert.deepEqual(target.state(), source.state());
@@ -379,7 +380,7 @@ test('legacy version 1–6 backups restore and migrate without changing original
   for (const version of [6, 5, 4, 3, 2, 1]) {
     const fixture = legacyFixture(version);
     await target.restoreBackup(backupBytes(fixture.dbPath, version));
-    assert.equal(target.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '9');
+    assert.equal(target.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '10');
     assert.deepEqual(rawRows(target.db, 'tasks'), fixture.tasks);
     if (version >= 3) {
       assert.deepEqual(rawRows(target.db, 'subscriptions'), fixture.subscriptions);
@@ -541,7 +542,7 @@ test('version 6 databases migrate quota categories and accounts unchanged', () =
     return rawRows(db, 'api_quotas');
   });
   const migrated = open(directory);
-  assert.equal(migrated.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '9');
+  assert.equal(migrated.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '10');
   assert.deepEqual(rawRows(migrated.db, 'api_quotas'), before);
   assert.deepEqual(migrated.state().quotaCategories.map(row => row.id), ['ai', 'network', 'other']);
   assert.equal(migrated.quota(network.id).account, EMAIL_A);
@@ -559,12 +560,12 @@ test('current version backups with unknown quota categories are rejected', async
   const malformedPath = malformed.dbPath;
   close(malformed);
   withRawDb(malformedPath, db => db.exec("UPDATE api_quotas SET category='missing'"));
-  await assert.rejects(target.restoreBackup(backupBytes(malformedPath, 9)), /额度字段校验失败/);
+  await assert.rejects(target.restoreBackup(backupBytes(malformedPath, 10)), /额度字段校验失败/);
   const noOther = open();
   const noOtherPath = noOther.dbPath;
   close(noOther);
   withRawDb(noOtherPath, db => db.exec("DELETE FROM quota_categories WHERE id='other'"));
-  await assert.rejects(target.restoreBackup(backupBytes(noOtherPath, 9)), /额度分类校验失败/);
+  await assert.rejects(target.restoreBackup(backupBytes(noOtherPath, 10)), /额度分类校验失败/);
   assert.deepEqual(target.state(), snapshot);
   close(target);
 });
@@ -644,4 +645,122 @@ test('v7 restore preserves category membership and names, and v8 retains orderin
   const restored = open();
   await restored.restoreBackup(fs.readFileSync(restarted.backupPath(saved.id)));
   assert.deepEqual(restored.state(), restarted.state());
+});
+
+
+// 1×1 透明 PNG 和一个小 SVG，只用来测 logo 的存取。
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+const SVG = Buffer.from('<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1"/></svg>');
+const logoFiles = store => fs.readdirSync(path.join(store.root, '图标')).sort();
+
+test('every item kind can set, share, replace and remove a logo; unused files are cleaned up', () => {
+  const store = open();
+  const quota = store.insertQuota({ platform: 'Logo quota' });
+  const sub = store.insertSubscription({ service: 'Logo subscription' });
+  const task = store.insertTask({ title: 'Logo task' });
+  const event = store.insertEvent({ title: 'Logo event', date: '2026-11-20' });
+  for (const [kind, record] of [['quota', quota], ['subscription', sub], ['task', task], ['event', event]]) assert.equal(record.logo, '', kind + ' starts without a logo');
+
+  const withPng = store.setLogo('quota', quota.id, PNG);
+  assert.match(withPng.logo, /^[0-9a-f]{64}\.png$/);
+  assert.equal(withPng.version, quota.version + 1);
+  assert.equal(store.setLogo('subscription', sub.id, PNG).logo, withPng.logo, 'same image shares one file');
+  assert.deepEqual(logoFiles(store), [withPng.logo]);
+  assert.match(store.setLogo('task', task.id.slice(0, 8), SVG).logo, /\.svg$/, 'id prefixes work');
+  assert.match(store.setLogo('event', event.id, PNG).logo, /\.png$/);
+
+  // 换图后旧图还被订阅和日程用着，不会删；全部移除后才删除。
+  store.setLogo('quota', quota.id, SVG);
+  assert.equal(logoFiles(store).length, 2);
+  store.setLogo('subscription', sub.id, null);
+  store.setLogo('event', event.id, null);
+  assert.equal(store.subscription(sub.id).logo, '');
+  assert.deepEqual(logoFiles(store), [store.task(task.id).logo]);
+
+  // 回收站里的条目仍然占用它的 logo。
+  store.deleteEntity('task', task.id);
+  store.setLogo('quota', quota.id, null);
+  assert.deepEqual(logoFiles(store), [store.task(task.id, true).logo]);
+
+  assert.throws(() => store.setLogo('quota', quota.id, Buffer.from('not an image')), /只支持 PNG/);
+  assert.throws(() => store.setLogo('quota', quota.id, Buffer.concat([PNG, Buffer.alloc(1024 * 1024)])), /1 MB/);
+  assert.throws(() => store.setLogo('quota', quota.id, Buffer.alloc(0)), /空的/);
+  assert.throws(() => store.setLogo('note', 'x', PNG), /只有待办、日程、额度、订阅/);
+  assert.throws(() => store.setLogo('quota', quota.id, PNG, { version: 1 }), /其他窗口更新/);
+  assert.throws(() => store.logoPath('../folio.sqlite'), /文件名无效/);
+
+  const logged = store.activity({ kind: 'quota', limit: 1 })[0];
+  assert.equal(logged.action, 'update');
+  assert.equal(logged.after.logo, '');
+  assert.match(logged.before.logo, /\.svg$/);
+});
+
+test('logos survive backup and restore; version 9 data upgrades with empty logos', async () => {
+  const source = open();
+  const sub = store => store.subscriptions;
+  const record = source.setLogo('subscription', source.insertSubscription({ service: 'Backed up' }).id, PNG);
+  const saved = await source.createBackup();
+  const bytes = new Uint8Array(fs.readFileSync(source.backupPath(saved.id)));
+  const entries = unzipSync(bytes);
+  assert.ok(entries['logos/' + record.logo], 'backup contains the logo');
+
+  const target = open();
+  target.setLogo('task', target.insertTask({ title: 'Replaced on restore' }).id, SVG);
+  await target.restoreBackup(bytes);
+  assert.equal(target.subscription(record.id).logo, record.logo);
+  assert.deepEqual(logoFiles(target), [record.logo], 'restored logo folder replaces the old one');
+  assert.equal(typeof target.logoPath(record.logo).absolute, 'string');
+
+  // 备份里少了图片文件时拒绝恢复，当前数据不变。
+  const missing = { ...entries };
+  delete missing['logos/' + record.logo];
+  const manifest = JSON.parse(strFromU8(missing['manifest.json']));
+  delete manifest.files['logos/' + record.logo];
+  missing['manifest.json'] = strToU8(JSON.stringify(manifest));
+  await assert.rejects(target.restoreBackup(zipSync(missing)), /缺少图标文件/);
+  assert.equal(target.subscription(record.id).logo, record.logo);
+
+  // 第 9 版数据库：去掉 logo 列，升级后列补上、值为空。
+  const legacy = open();
+  const legacyTask = legacy.insertTask({ title: 'Old task' });
+  const dbPath = legacy.dbPath;
+  close(legacy);
+  withRawDb(dbPath, db => db.exec('ALTER TABLE tasks DROP COLUMN logo; ALTER TABLE events DROP COLUMN logo; ALTER TABLE api_quotas DROP COLUMN logo; ALTER TABLE subscriptions DROP COLUMN logo;' +
+    "UPDATE settings SET value='9' WHERE key='schema_version';"));
+  const upgraded = open(path.dirname(path.dirname(path.dirname(dbPath))));
+  assert.equal(upgraded.db.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, '10');
+  assert.equal(upgraded.task(legacyTask.id).logo, '');
+  assert.equal(sub(upgraded.state()).length, 0);
+});
+
+test('logo HTTP routes upload, serve and remove images and require the app header', async () => {
+  const running = await startServer(root(), 0, { legacyAffairsDir: path.join(scratch, 'absent-legacy-logos') });
+  const base = 'http://127.0.0.1:' + running.port;
+  const upload = (route, bytes, headers = { 'X-Folio-App': '1' }) => {
+    const form = new FormData();
+    form.append('logo', new Blob([bytes]), 'logo.png');
+    return fetch(base + route, { method: 'PUT', headers, body: form });
+  };
+  try {
+    const created = await (await fetch(base + '/api/events', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Folio-App': '1' }, body: JSON.stringify({ title: 'Has logo', date: '2026-11-20' }) })).json();
+    assert.equal((await upload('/api/events/' + created.id + '/logo', PNG, {})).status, 403, 'needs X-Folio-App');
+    const response = await upload('/api/events/' + created.id + '/logo', PNG);
+    assert.equal(response.status, 200);
+    const record = await response.json();
+    assert.match(record.logo, /\.png$/);
+    const image = await fetch(base + '/api/logos/' + record.logo);
+    assert.equal(image.status, 200);
+    assert.equal(image.headers.get('content-type'), 'image/png');
+    assert.deepEqual(Buffer.from(await image.arrayBuffer()), PNG);
+    assert.equal((await fetch(base + '/api/logos/nope.png')).status, 400);
+    assert.equal((await upload('/api/notes/' + created.id + '/logo', PNG)).status, 404);
+    assert.equal((await upload('/api/events/' + created.id + '/logo', Buffer.from('text'))).status, 400);
+    const removed = await fetch(base + '/api/events/' + created.id + '/logo', { method: 'DELETE', headers: { 'X-Folio-App': '1' } });
+    assert.equal((await removed.json()).logo, '');
+    assert.equal((await fetch(base + '/api/logos/' + record.logo)).status, 404);
+  } finally {
+    const closed = new Promise(resolve => running.server.once('close', resolve));
+    running.close();
+    await closed;
+  }
 });

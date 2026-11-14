@@ -22,13 +22,13 @@ export function createApp(store, options = {}) {
       if (origin !== 'http://' + host) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Folio-App, X-Daily-App, X-Folio-Source');
-        res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+        res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
       }
     }
     if (req.method === 'OPTIONS') return res.status(204).end();
     const appHeader = req.get('x-folio-app') || req.get('x-daily-app');
-    if (['POST', 'PATCH', 'DELETE'].includes(req.method) && appHeader !== '1') return res.status(403).json({ error: '请求来源无效。' });
-    if (['POST', 'PATCH', 'DELETE'].includes(req.method) && store.restoring) return res.status(503).json({ error: '正在恢复完整备份，请稍后重试。', code: 'RESTORE_IN_PROGRESS' });
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && appHeader !== '1') return res.status(403).json({ error: '请求来源无效。' });
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && store.restoring) return res.status(503).json({ error: '正在恢复完整备份，请稍后重试。', code: 'RESTORE_IN_PROGRESS' });
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:* http://localhost:*; frame-ancestors 'none'; base-uri 'self'; form-action 'self';");
@@ -39,6 +39,7 @@ export function createApp(store, options = {}) {
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024, files: 20 } });
   // 写入按请求头 X-Folio-Source 记录来源（命令行传 cli），默认是应用内。
   const as = (req, work) => store.as(req.get('x-folio-source') || 'app', work);
+  const logoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 1024 * 1024, files: 1 } });
   const restoreUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 512 * 1024 * 1024, files: 1 } });
   app.get('/api/health', (_req, res) => res.json({ app: 'folio', version: '1.0.0', pid: process.pid, root: store.root }));
   app.get('/api/state', (_req, res) => res.json(store.state()));
@@ -81,6 +82,20 @@ export function createApp(store, options = {}) {
   app.delete('/api/attachments/:id', (req, res) => { store.deleteEntity('attachment', req.params.id); res.status(204).end(); });
   app.post('/api/attachments/:id/links', (req, res) => { store.setLink(req.params.id, req.body); res.status(204).end(); });
   app.delete('/api/attachments/:id/links', (req, res) => { store.setLink(req.params.id, req.body, true); res.status(204).end(); });
+  // logo：上传字段名 logo；四种条目共用。
+  const LOGO_ROUTES = { tasks: 'task', events: 'event', quotas: 'quota', subscriptions: 'subscription' };
+  const logoKind = route => { const kind = LOGO_ROUTES[route]; if (!kind) throw new AppError('只有待办、日程、额度、订阅可以设置 logo。', 404, 'NOT_FOUND'); return kind; };
+  app.put('/api/:route/:id/logo', logoUpload.single('logo'), (req, res) => {
+    if (!req.file) throw new AppError('未选择图片文件。');
+    res.json(as(req, () => store.setLogo(logoKind(req.params.route), req.params.id, new Uint8Array(req.file.buffer), req.body)));
+  });
+  app.delete('/api/:route/:id/logo', (req, res) => res.json(as(req, () => store.setLogo(logoKind(req.params.route), req.params.id, null, req.body ?? {}))));
+  app.get('/api/logos/:file', (req, res, next) => {
+    const { absolute, type } = store.logoPath(req.params.file);
+    // 文件名就是内容哈希，内容不会变，可以长期缓存。
+    res.set({ 'Content-Type': type, 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox" });
+    res.sendFile(path.basename(absolute), { root: path.dirname(absolute) }, error => { if (error) next(error); });
+  });
   app.post('/api/trash/:type/:id/restore', (req, res) => { as(req, () => store.restoreEntity(req.params.type, req.params.id)); res.status(204).end(); });
   app.get('/api/backups', (_req, res) => res.json(store.listBackups()));
   app.post('/api/backups', async (_req, res) => res.status(201).json(await store.createBackup()));

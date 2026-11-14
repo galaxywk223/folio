@@ -5,21 +5,23 @@ export type Kind = 'task' | 'quota' | 'subscription' | 'event';
 export type View = 'today' | 'schedule' | 'pending' | 'completed' | 'quotas' | 'subscriptions' | 'trash' | 'activity' | 'settings';
 export type Task = {
   id: string; title: string; dateText: string; bodyMarkdown: string; status: 'pending' | 'completed';
-  sortOrder: number; completedAt: string | null; createdAt: string; updatedAt: string; deletedAt: string | null; version: number;
+  sortOrder: number; completedAt: string | null; createdAt: string; updatedAt: string; deletedAt: string | null; version: number; logo: string;
 };
 export type Note = { id: string; title: string; bodyMarkdown: string; createdAt: string; updatedAt: string; deletedAt: string | null; version: number };
 export type Attachment = { id: string; filename: string; storagePath: string; size: number; createdAt: string; deletedAt: string | null };
 export type Link = { attachmentId: string; ownerType: 'task' | 'note'; ownerId: string };
 export type ApiQuota = {
   id: string; kind: '官方' | '中转'; category: string; platform: string; account: string; entryUrl: string; balance: string; recordedAt: string;
-  note: string; createdAt: string; updatedAt: string; deletedAt: string | null; version: number;
+  note: string; createdAt: string; updatedAt: string; deletedAt: string | null; version: number; logo: string;
 };
 export type Subscription = {
   id: string; service: string; account: string; plan: string; benefits: string; status: string; cost: string;
   category: string; autoRenew: boolean | null;
-  expiresAt: string; entryUrl: string; note: string; createdAt: string; updatedAt: string; deletedAt: string | null; version: number;
+  expiresAt: string; entryUrl: string; note: string; createdAt: string; updatedAt: string; deletedAt: string | null; version: number; logo: string;
 };
-export type EventItem = ScheduleEvent & { createdAt: string; updatedAt: string; version: number };
+export type EventItem = ScheduleEvent & { createdAt: string; updatedAt: string; version: number; logo: string };
+// 编辑器里待上传或待移除的 logo；null 表示不改。
+export type LogoChange = { file: File } | { remove: true } | null;
 export type EventDraft = {
   title: string; date: string; startTime: string; endTime: string; location: string; note: string;
   repeat: Repeat; repeatDays: number[]; repeatUntil: string; reminderMinutes: number | null; version?: number;

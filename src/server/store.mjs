@@ -23,9 +23,9 @@ const fileColumns = 'id,filename,storage_path AS storagePath,size,created_at AS 
 const legacyQuotaColumns = 'id,kind,platform,entry_url AS entryUrl,balance,recorded_at AS recordedAt,note,created_at AS createdAt,updated_at AS updatedAt,deleted_at AS deletedAt,version';
 const v4QuotaColumns = legacyQuotaColumns + ',category';
 const quotaColumns = v4QuotaColumns + ',account';
-const SCHEMA_VERSION = 9;
-const SCHEMA_VERSIONS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
-const quotaColumnsBySchema = { '2': legacyQuotaColumns, '3': legacyQuotaColumns, '4': v4QuotaColumns, '5': quotaColumns, '6': quotaColumns, '7': quotaColumns, '8': quotaColumns, '9': quotaColumns };
+const SCHEMA_VERSION = 10;
+const SCHEMA_VERSIONS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'];
+const quotaColumnsBySchema = { '2': legacyQuotaColumns, '3': legacyQuotaColumns, '4': v4QuotaColumns, '5': quotaColumns, '6': quotaColumns, '7': quotaColumns, '8': quotaColumns, '9': quotaColumns, '10': quotaColumns + ',logo' };
 const legacySubColumns = 'id,service,account,plan,benefits,status,cost,expires_at AS expiresAt,entry_url AS entryUrl,note,created_at AS createdAt,updated_at AS updatedAt,deleted_at AS deletedAt,version';
 const subColumns = legacySubColumns + ',category,auto_renew AS autoRenew';
 const eventColumns = 'id,title,date,start_time AS startTime,end_time AS endTime,location,note,repeat_rule AS repeat,repeat_days AS repeatDays,repeat_until AS repeatUntil,skipped_dates AS skippedDates,reminder_minutes AS reminderMinutes,created_at AS createdAt,updated_at AS updatedAt,deleted_at AS deletedAt,version';
@@ -62,6 +62,23 @@ const ACTIVITY_TABLE = `CREATE TABLE IF NOT EXISTS activity_log(
 const ACTIVITY_LIMIT = 2000;
 const activityColumns = 'id,at,source,action,kind,item_id AS itemId,title,before_json AS beforeJson,after_json AS afterJson';
 const ENTITY_TABLES = { task: 'tasks', note: 'notes', attachment: 'attachments', quota: 'api_quotas', subscription: 'subscriptions', event: 'events' };
+// 第 10 版起，待办、日程、额度、订阅都可以设置 logo；列里存「图标」目录下的文件名（内容哈希 + 扩展名）。
+const LOGO_KINDS = { task: 'tasks', event: 'events', quota: 'api_quotas', subscription: 'subscriptions' };
+const LOGO_MAX_BYTES = 1024 * 1024;
+const LOGO_FILE = /^[0-9a-f]{64}\.(png|jpg|webp|svg|ico)$/;
+const LOGO_TYPES = { png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp', svg: 'image/svg+xml', ico: 'image/x-icon' };
+const withLogo = columns => columns + ',logo';
+// 按文件头判断图片格式，不看扩展名。
+function logoFormat(bytes) {
+  const starts = (...values) => values.every((value, index) => bytes[index] === value);
+  if (starts(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return 'png';
+  if (starts(0xff, 0xd8, 0xff)) return 'jpg';
+  if (bytes.length > 12 && starts(0x52, 0x49, 0x46, 0x46) && String.fromCharCode(...bytes.subarray(8, 12)) === 'WEBP') return 'webp';
+  if (starts(0x00, 0x00, 0x01, 0x00)) return 'ico';
+  const head = new TextDecoder('utf-8', { fatal: false }).decode(bytes.subarray(0, 4096)).replace(/^\uFEFF/, '').trimStart();
+  if (/^(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*(<!DOCTYPE svg[^>]*>\s*)?<svg[\s>]/i.test(head)) return 'svg';
+  return null;
+}
 const ENTITY_LABELS = { task: '事项', note: '记录', attachment: '附件', quota: '额度记录', subscription: '订阅', event: '日程' };
 
 const DEFAULT_SUBSCRIPTION_CATEGORIES = [
@@ -283,13 +300,14 @@ export class Store {
     this.root = path.resolve(root);
     this.dataDir = path.join(this.root, 'app', 'data');
     this.attachmentDir = path.join(this.root, '附件');
+    this.logoDir = path.join(this.root, '图标');
     this.backupDir = path.join(this.root, '备份');
     this.exportDir = path.join(this.root, '导出');
     this.dbPath = path.join(this.dataDir, 'folio.sqlite');
     this.source = 'app';
     this.logging = true;
     this.openCount = 0;
-    for (const directory of [this.dataDir, this.attachmentDir]) fs.mkdirSync(directory, { recursive: true });
+    for (const directory of [this.dataDir, this.attachmentDir, this.logoDir]) fs.mkdirSync(directory, { recursive: true });
     this.migrateLegacyDbName();
     const existing = fs.existsSync(this.dbPath);
     this.openDatabase();
@@ -304,6 +322,7 @@ export class Store {
         SERVICE_TABLES + EVENT_TABLE + ACTIVITY_TABLE +
         "INSERT INTO settings VALUES('schema_version','" + SCHEMA_VERSION + "');"
       );
+      this.addLogoColumns();
       this.seedCategories('subscription');
       this.seedCategories('quota');
     });
@@ -320,8 +339,8 @@ export class Store {
     this.transaction(() => {
       // v1 没有服务表，直接按最新结构建表；v2–v6 逐级补列，已有记录归为 AI，账号从备注迁出，分类改为可管理。
       // v8 及更早都没有日程和改动记录，最后统一建表。
-      if (version.value === '8') {
-        // 只需要新增日程和改动记录。
+      if (['8', '9'].includes(version.value)) {
+        // v8 只需要新增日程和改动记录；v9 只需要新增 logo 列。
       } else if (version.value === '1') {
         this.db.exec(SERVICE_TABLES);
         this.seedCategories('subscription');
@@ -355,8 +374,16 @@ export class Store {
         this.rebuildQuotaTable();
       }
       this.db.exec(EVENT_TABLE + ACTIVITY_TABLE);
+      this.addLogoColumns();
       this.db.prepare("UPDATE settings SET value=? WHERE key='schema_version'").run(String(SCHEMA_VERSION));
     });
+  }
+  // v10：四种条目都加 logo 列，旧数据为空，界面显示首字母头像。
+  addLogoColumns() {
+    for (const table of Object.values(LOGO_KINDS)) {
+      if (this.db.prepare('PRAGMA table_info(' + table + ')').all().some(column => column.name === 'logo')) continue;
+      this.db.exec('ALTER TABLE ' + table + " ADD COLUMN logo TEXT NOT NULL DEFAULT ''");
+    }
   }
   // v6 及更早：额度分类从固定的 CHECK 约束改为引用 quota_categories，保留原有 id。
   rebuildQuotaTable() {
@@ -536,7 +563,7 @@ export class Store {
   }
   task(id, includeDeleted = false) {
     id = this.resolveId('task', id);
-    const task = this.db.prepare('SELECT ' + taskColumns + ' FROM tasks WHERE id=?' + (includeDeleted ? '' : ' AND deleted_at IS NULL')).get(id);
+    const task = this.db.prepare('SELECT ' + withLogo(taskColumns) + ' FROM tasks WHERE id=?' + (includeDeleted ? '' : ' AND deleted_at IS NULL')).get(id);
     if (!task) throw new AppError('事项不存在或已移入回收站。', 404, 'NOT_FOUND');
     return task;
   }
@@ -554,33 +581,33 @@ export class Store {
   }
   quota(id, includeDeleted = false) {
     id = this.resolveId('quota', id);
-    const row = this.db.prepare('SELECT ' + quotaColumns + ' FROM api_quotas WHERE id=?' + (includeDeleted ? '' : ' AND deleted_at IS NULL')).get(id);
+    const row = this.db.prepare('SELECT ' + withLogo(quotaColumns) + ' FROM api_quotas WHERE id=?' + (includeDeleted ? '' : ' AND deleted_at IS NULL')).get(id);
     if (!row) throw new AppError('额度记录不存在或已移入回收站。', 404, 'NOT_FOUND');
     return row;
   }
   subscription(id, includeDeleted = false) {
     id = this.resolveId('subscription', id);
-    const row = this.db.prepare('SELECT ' + subColumns + ' FROM subscriptions WHERE id=?' + (includeDeleted ? '' : ' AND deleted_at IS NULL')).get(id);
+    const row = this.db.prepare('SELECT ' + withLogo(subColumns) + ' FROM subscriptions WHERE id=?' + (includeDeleted ? '' : ' AND deleted_at IS NULL')).get(id);
     if (!row) throw new AppError('订阅不存在或已移入回收站。', 404, 'NOT_FOUND');
     return readSubscription(row);
   }
   event(id, includeDeleted = false) {
     id = this.resolveId('event', id);
-    const row = this.db.prepare('SELECT ' + eventColumns + ' FROM events WHERE id=?' + (includeDeleted ? '' : ' AND deleted_at IS NULL')).get(id);
+    const row = this.db.prepare('SELECT ' + withLogo(eventColumns) + ' FROM events WHERE id=?' + (includeDeleted ? '' : ' AND deleted_at IS NULL')).get(id);
     if (!row) throw new AppError('日程不存在或已移入回收站。', 404, 'NOT_FOUND');
     return readEvent(row);
   }
   state() {
     return {
-      tasks: this.db.prepare('SELECT ' + taskColumns + ' FROM tasks').all().sort(compareTasks),
+      tasks: this.db.prepare('SELECT ' + withLogo(taskColumns) + ' FROM tasks').all().sort(compareTasks),
       notes: this.db.prepare('SELECT ' + noteColumns + ' FROM notes ORDER BY updated_at DESC').all(),
       attachments: this.db.prepare('SELECT ' + fileColumns + ' FROM attachments ORDER BY created_at DESC').all(),
       links: this.db.prepare('SELECT attachment_id AS attachmentId,owner_type AS ownerType,owner_id AS ownerId FROM attachment_links').all(),
-      quotas: this.db.prepare('SELECT ' + quotaColumns + ' FROM api_quotas ORDER BY platform COLLATE NOCASE').all(),
+      quotas: this.db.prepare('SELECT ' + withLogo(quotaColumns) + ' FROM api_quotas ORDER BY platform COLLATE NOCASE').all(),
       quotaCategories: this.quotaCategories(),
       subscriptionCategories: this.subscriptionCategories(),
-      subscriptions: this.db.prepare('SELECT ' + subColumns + ' FROM subscriptions').all().map(readSubscription).sort(compareSubscriptions),
-      events: this.db.prepare('SELECT ' + eventColumns + ' FROM events').all().map(readEvent).sort(compareEvents),
+      subscriptions: this.db.prepare('SELECT ' + withLogo(subColumns) + ' FROM subscriptions').all().map(readSubscription).sort(compareSubscriptions),
+      events: this.db.prepare('SELECT ' + withLogo(eventColumns) + ' FROM events').all().map(readEvent).sort(compareEvents),
       migration: (() => {
         const row = this.db.prepare("SELECT value FROM settings WHERE key='migration_metadata'").get();
         return row ? JSON.parse(row.value) : null;
@@ -797,6 +824,42 @@ export class Store {
       .run(...(hasVersion ? [now(), id] : [id]));
     if (type !== 'attachment') this.record('restore', type, null, this.entity(type, id));
   }
+  // 设置或移除 logo。同一张图给多个条目用时只存一份；没人再用的图会删除。
+  setLogo(kind, id, bytes, input = {}) {
+    const table = LOGO_KINDS[kind];
+    if (!table) throw new AppError('只有待办、日程、额度、订阅可以设置 logo。');
+    const current = this.entity(kind, id);
+    id = current.id;
+    this.checkVersion(current, input.version === undefined || input.version === '' ? undefined : Number(input.version));
+    let logo = '';
+    if (bytes) {
+      if (!bytes.length) throw new AppError('图片文件是空的。');
+      if (bytes.length > LOGO_MAX_BYTES) throw new AppError('图片不能超过 1 MB。');
+      const format = logoFormat(bytes);
+      if (!format) throw new AppError('只支持 PNG、JPG、WebP、SVG 或 ICO 图片。');
+      logo = hash(bytes) + '.' + format;
+      const destination = path.join(this.logoDir, logo);
+      if (!fs.existsSync(destination)) fs.writeFileSync(destination, bytes);
+    }
+    if (logo === current.logo) return current;
+    this.transaction(() => {
+      this.db.prepare('UPDATE ' + table + ' SET logo=?,updated_at=?,version=version+1 WHERE id=?').run(logo, now(), id);
+      this.record('update', kind, current, this.entity(kind, id));
+    });
+    this.collectLogo(current.logo);
+    return this.entity(kind, id);
+  }
+  collectLogo(file) {
+    if (!file || !LOGO_FILE.test(file)) return;
+    const used = Object.values(LOGO_KINDS).some(table => this.db.prepare('SELECT 1 FROM ' + table + ' WHERE logo=? LIMIT 1').get(file));
+    if (!used) fs.rmSync(path.join(this.logoDir, file), { force: true });
+  }
+  logoPath(file) {
+    if (typeof file !== 'string' || !LOGO_FILE.test(file)) throw new AppError('图标文件名无效。');
+    const absolute = path.join(this.logoDir, file);
+    if (!fs.existsSync(absolute)) throw new AppError('图标不存在。', 404, 'NOT_FOUND');
+    return { absolute, type: LOGO_TYPES[file.split('.').pop()] };
+  }
   insertFile(filename, bytes, ownerType, ownerId) {
     const cleanName = path.basename(filename.replaceAll('\\', '/')).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '') || '附件';
     if (ownerType || ownerId) this.validateOwner(ownerType, ownerId);
@@ -834,6 +897,9 @@ export class Store {
       await backup(this.db, scratch);
       const entries = { 'data.sqlite': new Uint8Array(fs.readFileSync(scratch)) };
       for (const file of walkFiles(this.attachmentDir)) entries['attachments/' + file.relative] = new Uint8Array(fs.readFileSync(file.absolute));
+      for (const name of fs.existsSync(this.logoDir) ? fs.readdirSync(this.logoDir) : []) {
+        if (LOGO_FILE.test(name)) entries['logos/' + name] = new Uint8Array(fs.readFileSync(path.join(this.logoDir, name)));
+      }
       const manifest = { format: 'folio-backup', schemaVersion: SCHEMA_VERSION, createdAt: now(), label, files: Object.fromEntries(Object.entries(entries).map(([name, bytes]) => [name, hash(bytes)])) };
       entries['manifest.json'] = strToU8(JSON.stringify(manifest, null, 2));
       const filename = id + '.zip';
@@ -870,7 +936,7 @@ export class Store {
     if (!okFormat || !manifest.files || !entries['data.sqlite']) throw new AppError('备份版本或结构不受支持。');
     for (const [name, checksum] of Object.entries(manifest.files)) {
       safeRelative(name);
-      if (name !== 'data.sqlite' && !name.startsWith('attachments/')) throw new AppError('备份包含不支持的内容。');
+      if (name !== 'data.sqlite' && !name.startsWith('attachments/') && !(name.startsWith('logos/') && LOGO_FILE.test(name.slice('logos/'.length)))) throw new AppError('备份包含不支持的内容。');
       if (!entries[name] || hash(entries[name]) !== checksum) throw new AppError('备份校验失败，当前数据未改变。');
     }
     if (Object.keys(entries).some(name => name !== 'manifest.json' && !(name in manifest.files))) throw new AppError('备份包含未校验文件。');
@@ -878,7 +944,9 @@ export class Store {
     fs.mkdirSync(scratch, { recursive: true });
     const candidatePath = path.join(scratch, 'candidate.sqlite');
     const candidateAttachments = path.join(scratch, 'attachments');
+    const candidateLogos = path.join(scratch, 'logos');
     fs.mkdirSync(candidateAttachments);
+    fs.mkdirSync(candidateLogos);
     let validationDb;
     try {
       fs.writeFileSync(candidatePath, entries['data.sqlite']);
@@ -887,19 +955,27 @@ export class Store {
       const schema = validationDb.prepare("SELECT value FROM settings WHERE key='schema_version'").get()?.value;
       if (!SCHEMA_VERSIONS.includes(schema) || Number(schema) !== manifest.schemaVersion) throw new AppError('备份数据库校验失败。');
       validationDb.prepare('SELECT ' + taskColumns + ' FROM tasks').all();
+      if (schema === '10') {
+        // 每个引用的 logo 都要在备份里。
+        for (const table of Object.values(LOGO_KINDS)) {
+          for (const { logo } of validationDb.prepare('SELECT logo FROM ' + table).all()) {
+            if (typeof logo !== 'string' || (logo && (!LOGO_FILE.test(logo) || !entries['logos/' + logo]))) throw new AppError('备份缺少图标文件。');
+          }
+        }
+      }
       validationDb.prepare('SELECT ' + noteColumns + ' FROM notes').all();
       validationDb.prepare('SELECT * FROM attachment_links').all();
       if (schema !== '1') {
         const quotas = validationDb.prepare('SELECT ' + quotaColumnsBySchema[schema] + ' FROM api_quotas').all();
-        const ordered = ['8', '9'].includes(schema);
+        const ordered = ['8', '9', '10'].includes(schema);
         const categoryColumns = ordered ? 'id,name,sort_order' : 'id,name';
-        const managedQuotas = ['7', '8', '9'].includes(schema);
+        const managedQuotas = ['7', '8', '9', '10'].includes(schema);
         const quotaCategoryIds = managedQuotas ? validCategories(validationDb.prepare('SELECT ' + categoryColumns + ' FROM quota_categories').all(), ordered) : null;
         if (managedQuotas && !quotaCategoryIds) throw new AppError('备份额度分类校验失败。');
-        if (['4', '5', '6', '7', '8', '9'].includes(schema) && quotas.some(row => !(managedQuotas ? quotaCategoryIds.has(row.category) : isServiceCategory(row.category)))) throw new AppError('备份额度字段校验失败。');
-        if (['5', '6', '7', '8', '9'].includes(schema) && quotas.some(row => typeof row.account !== 'string')) throw new AppError('备份额度字段校验失败。');
+        if (['4', '5', '6', '7', '8', '9', '10'].includes(schema) && quotas.some(row => !(managedQuotas ? quotaCategoryIds.has(row.category) : isServiceCategory(row.category)))) throw new AppError('备份额度字段校验失败。');
+        if (['5', '6', '7', '8', '9', '10'].includes(schema) && quotas.some(row => typeof row.account !== 'string')) throw new AppError('备份额度字段校验失败。');
         const subscriptions = validationDb.prepare('SELECT ' + (schema === '2' ? legacySubColumns : subColumns) + ' FROM subscriptions').all();
-        const managed = ['6', '7', '8', '9'].includes(schema);
+        const managed = ['6', '7', '8', '9', '10'].includes(schema);
         const categoryIds = managed ? validCategories(validationDb.prepare('SELECT ' + categoryColumns + ' FROM subscription_categories').all(), ordered) : null;
         if (managed && !categoryIds) throw new AppError('备份订阅分类校验失败。');
         if (schema !== '2' && subscriptions.some(row =>
@@ -907,7 +983,7 @@ export class Store {
           throw new AppError('备份订阅字段校验失败。');
         }
       }
-      if (schema === '9') {
+      if (['9', '10'].includes(schema)) {
         const events = validationDb.prepare('SELECT ' + eventColumns + ' FROM events').all();
         if (events.some(row => typeof row.title !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(row.date) || !REPEATS.includes(row.repeat) ||
           !(row.reminderMinutes === null || REMINDER_OPTIONS.includes(row.reminderMinutes)))) throw new AppError('备份日程字段校验失败。');
@@ -924,16 +1000,23 @@ export class Store {
         fs.mkdirSync(path.dirname(destination), { recursive: true });
         fs.writeFileSync(destination, entries[name], { flag: 'wx' });
       }
+      for (const name of Object.keys(manifest.files).filter(name => name.startsWith('logos/'))) {
+        fs.writeFileSync(path.join(candidateLogos, name.slice('logos/'.length)), entries[name], { flag: 'wx' });
+      }
       const previousBackup = await this.createBackup('恢复前自动备份');
       this.db.close();
       const previousDb = path.join(scratch, 'previous.sqlite');
       const previousAttachments = path.join(scratch, 'previous-attachments');
-      let dbMoved = false, filesMoved = false;
+      const previousLogos = path.join(scratch, 'previous-logos');
+      let dbMoved = false, filesMoved = false, logosMoved = false;
       try {
         fs.renameSync(this.dbPath, previousDb); dbMoved = true;
         fs.renameSync(this.attachmentDir, previousAttachments); filesMoved = true;
+        fs.mkdirSync(this.logoDir, { recursive: true });
+        fs.renameSync(this.logoDir, previousLogos); logosMoved = true;
         fs.renameSync(candidatePath, this.dbPath);
         fs.renameSync(candidateAttachments, this.attachmentDir);
+        fs.renameSync(candidateLogos, this.logoDir);
         this.openDatabase();
         this.ensureSchema();
       } catch (error) {
@@ -945,6 +1028,10 @@ export class Store {
         if (filesMoved) {
           if (fs.existsSync(this.attachmentDir)) fs.renameSync(this.attachmentDir, path.join(scratch, 'failed-attachments'));
           fs.renameSync(previousAttachments, this.attachmentDir);
+        }
+        if (logosMoved) {
+          if (fs.existsSync(this.logoDir)) fs.renameSync(this.logoDir, path.join(scratch, 'failed-logos'));
+          fs.renameSync(previousLogos, this.logoDir);
         }
         this.openDatabase();
         throw error;
